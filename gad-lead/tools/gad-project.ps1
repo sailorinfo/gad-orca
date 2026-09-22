@@ -405,8 +405,8 @@ function Get-ManagedIndexEntries {
 }
 
 function Get-IndexFingerprint {
-    param([string]$Project)
-    $result = Invoke-Git -Project $Project -Arguments @('ls-files', '--stage', '--debug')
+    param([string]$Project, [string]$IndexFile)
+    $result = Invoke-Git -Project $Project -IndexFile $IndexFile -Arguments @('ls-files', '--stage', '--debug')
     [void](Assert-GitSuccess -Result $result -Action 'Inspect primary index')
     return $result.Text
 }
@@ -414,6 +414,77 @@ function Get-IndexFingerprint {
 function Assert-IndexPreserved {
     param([string]$Project, [string]$Before)
     if ((Get-IndexFingerprint -Project $Project) -cne $Before) { throw 'Primary index changed unexpectedly; stop and inspect before retry.' }
+}
+
+function Assert-PreexistingIndexEntries {
+    param([string]$Project, [string]$Before, [string]$IndexFile)
+    if ([string]::IsNullOrEmpty($Before)) { return }
+    $after = Get-IndexFingerprint -Project $Project -IndexFile $IndexFile
+    foreach ($record in [regex]::Split($Before, '(?m)(?=^[0-7]{6} [0-9a-f]{40,64} [0-3]\t)')) {
+        if ($record -and -not $after.Contains($record.TrimEnd("`r", "`n"))) {
+            throw 'A preexisting primary-index entry changed; stop and inspect before retry.'
+        }
+    }
+}
+
+function Get-RawBlobId {
+    param([string]$Project, [string]$Path, [bool]$Write)
+    $arguments = @('hash-object')
+    if ($Write) { $arguments += '-w' }
+    $arguments += @('--no-filters', '--', $Path)
+    return Assert-GitSuccess -Result (Invoke-Git -Project $Project -Arguments $arguments) -Action 'Hash manifest bytes'
+}
+
+function Get-PrimaryIndexPath {
+    param([string]$Project)
+    $gitDirectory = Assert-GitSuccess -Result (Invoke-Git -Project $Project -Arguments @('rev-parse', '--absolute-git-dir')) -Action 'Locate Git index'
+    return Join-Path $gitDirectory 'index'
+}
+
+function Prepare-RootIndex {
+    param([string]$Project, [object[]]$Manifest, [string]$Before, [object[]]$ExistingEntries)
+    $primary = Get-PrimaryIndexPath -Project $Project
+    $candidate = Join-Path (Split-Path -Parent $primary) ('gad-project-index-' + [guid]::NewGuid().ToString('N'))
+    $ready = $false
+    try {
+        if (Test-Path -LiteralPath $primary -PathType Leaf) {
+            [System.IO.File]::Copy($primary, $candidate)
+        }
+        else {
+            [void](Assert-GitSuccess -Result (Invoke-Git -Project $Project -IndexFile $candidate -Arguments @('read-tree', '--empty')) -Action 'Prepare primary index')
+        }
+        $existingPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($entry in $ExistingEntries) { [void]$existingPaths.Add($entry.path) }
+        foreach ($entry in $Manifest) {
+            $oid = Get-RawBlobId -Project $Project -Path $entry.source -Write:$false
+            if (-not $existingPaths.Contains($entry.path)) {
+                [void](Assert-GitSuccess -Result (Invoke-Git -Project $Project -IndexFile $candidate -Arguments @('update-index', '--add', '--cacheinfo', '100644', $oid, $entry.path)) -Action "Prepare primary-index entry $($entry.path)")
+            }
+            $indexed = Assert-GitSuccess -Result (Invoke-Git -Project $Project -IndexFile $candidate -Arguments @('ls-files', '--stage', '--', $entry.path)) -Action 'Verify prepared index'
+            if ($indexed -ne "100644 $oid 0`t$($entry.path)") {
+                throw "Prepared primary index differs from manifest: $($entry.path)"
+            }
+        }
+        Assert-PreexistingIndexEntries -Project $Project -Before $Before -IndexFile $candidate
+        $ready = $true
+        return $candidate
+    }
+    finally {
+        if (-not $ready) { Remove-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Install-RootIndex {
+    param([string]$Project, [string]$Candidate)
+    $primary = Get-PrimaryIndexPath -Project $Project
+    if (Test-Path -LiteralPath $primary -PathType Leaf) {
+        $backup = Join-Path (Split-Path -Parent $primary) ('gad-project-index-backup-' + [guid]::NewGuid().ToString('N'))
+        [System.IO.File]::Replace($Candidate, $primary, $backup)
+        Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+    }
+    else {
+        [System.IO.File]::Move($Candidate, $primary)
+    }
 }
 
 function Invoke-Init {
@@ -425,7 +496,7 @@ function Invoke-Init {
         commitRequired=$false; leadLaunchAttempted=$false; leadStarted=$false
         gadLeadStarted=$false; indexPreserved=$true; copied=@(); reused=@()
         conflicting=@(); manifest=@(); plannedCommit=$false; neededCommit=$false; plannedLaunch=[bool]$Options.StartLead
-        nextAction=$null; error=$null
+        nextAction=$null; error=$null; stopRequired=$false
     }
     $indexBefore = $null
     try {
@@ -466,7 +537,8 @@ function Invoke-Init {
                 else { $state.reused += $entry.path }
             }
         }
-        foreach ($indexed in @(Get-ManagedIndexEntries -Project $Project)) {
+        $managedEntries = @(Get-ManagedIndexEntries -Project $Project)
+        foreach ($indexed in $managedEntries) {
             $managedIndexPath = $indexed.path -eq 'gad-lead' -or $indexed.path.StartsWith('gad-lead/')
             foreach ($skill in $script:RequiredSkills) {
                 if ($indexed.path.StartsWith(".agents/skills/$skill/")) { $managedIndexPath = $true }
@@ -477,8 +549,7 @@ function Invoke-Init {
                 if (-not $state.headBefore) { $state.conflicting += $indexed.path }
                 continue
             }
-            $blob = Invoke-Git -Project $Project -Arguments @('hash-object', '--', $byPath[$indexed.path].source)
-            $expectedOid = Assert-GitSuccess -Result $blob -Action 'Hash manifest file'
+            $expectedOid = Get-RawBlobId -Project $Project -Path $byPath[$indexed.path].source -Write:$false
             if ($indexed.oid -ne $expectedOid) { $state.conflicting += $indexed.path }
         }
         if ($state.conflicting.Count -gt 0) {
@@ -491,7 +562,7 @@ function Invoke-Init {
         $state.neededCommit = -not [bool]$state.headBefore
         if ($state.headBefore) {
             foreach ($entry in $manifest) {
-                $oid = Assert-GitSuccess -Result (Invoke-Git -Project $Project -Arguments @('hash-object', '--', $entry.source)) -Action 'Hash manifest file'
+                $oid = Get-RawBlobId -Project $Project -Path $entry.source -Write:$false
                 $headEntry = Invoke-Git -Project $Project -Arguments @('ls-tree', 'HEAD', '--', $entry.path)
                 if ($headEntry.ExitCode -ne 0 -or $headEntry.Text -notmatch ('^100644 blob ' + [regex]::Escape($oid) + "`t")) { $state.neededCommit = $true; break }
             }
@@ -523,6 +594,7 @@ function Invoke-Init {
         if ($needsCommit) {
             $state.phase = 'stage'
             $temporary = Join-Path ([System.IO.Path]::GetTempPath()) ("gad-project-index-" + [guid]::NewGuid().ToString('N'))
+            $rootIndexCandidate = $null
             try {
                 if ($state.headBefore) {
                     [void](Assert-GitSuccess -Result (Invoke-Git -Project $Project -IndexFile $temporary -Arguments @('read-tree', 'HEAD')) -Action 'Read HEAD into isolated index')
@@ -534,11 +606,12 @@ function Invoke-Init {
                     if ((Get-FileHashValue -Path $entry.source) -ne $entry.sha256) { throw "Source changed during staging: $($entry.path)" }
                     $destination = Join-Path $Project ($entry.path.Replace('/', '\'))
                     if ((Get-FileHashValue -Path $destination) -ne $entry.sha256) { throw "Destination changed during staging: $($entry.path)" }
-                    [void](Assert-GitSuccess -Result (Invoke-Git -Project $Project -IndexFile $temporary -Arguments @('add', '-f', '--', $entry.path)) -Action "Stage $($entry.path) in isolated index")
+                    $oid = Get-RawBlobId -Project $Project -Path $entry.source -Write:$true
+                    [void](Assert-GitSuccess -Result (Invoke-Git -Project $Project -IndexFile $temporary -Arguments @('update-index', '--add', '--cacheinfo', '100644', $oid, $entry.path)) -Action "Stage $($entry.path) in isolated index")
                 }
                 $tree = Assert-GitSuccess -Result (Invoke-Git -Project $Project -IndexFile $temporary -Arguments @('write-tree')) -Action 'Write isolated tree'
                 foreach ($entry in $manifest) {
-                    $oid = Assert-GitSuccess -Result (Invoke-Git -Project $Project -Arguments @('hash-object', '--', $entry.source)) -Action 'Hash manifest file'
+                    $oid = Get-RawBlobId -Project $Project -Path $entry.source -Write:$false
                     $treeEntry = Invoke-Git -Project $Project -Arguments @('ls-tree', $tree, '--', $entry.path)
                     if ($treeEntry.ExitCode -ne 0 -or $treeEntry.Text -notmatch ('^100644 blob ' + [regex]::Escape($oid) + "`t")) {
                         throw "Isolated tree differs from manifest: $($entry.path)"
@@ -551,6 +624,7 @@ function Invoke-Init {
                     foreach ($line in $lines) {
                         if ($line -notmatch '^100644 blob [0-9a-f]{40,64}\t(.*)$' -or -not $byPath.ContainsKey($Matches[1])) { throw 'Isolated root tree contains an unauthorized path or mode.' }
                     }
+                    $rootIndexCandidate = Prepare-RootIndex -Project $Project -Manifest $manifest -Before $indexBefore -ExistingEntries $managedEntries
                 }
                 $oldTree = if ($state.headBefore) { Assert-GitSuccess -Result (Invoke-Git -Project $Project -Arguments @('rev-parse', 'HEAD^{tree}')) -Action 'Read HEAD tree' } else { $null }
                 if ($tree -ne $oldTree) {
@@ -564,21 +638,34 @@ function Invoke-Init {
                     $state.commit = $newCommit
                     $state.committed = $true
                     $state.rootCommitCreated = -not [bool]$state.headBefore
+                    if ($state.rootCommitCreated) {
+                        try { Install-RootIndex -Project $Project -Candidate $rootIndexCandidate }
+                        catch {
+                            $state.stopRequired = $true
+                            throw "Root HEAD advanced but primary index could not be completed. STOP; inspect retained index candidate $rootIndexCandidate. $($_.Exception.Message)"
+                        }
+                    }
                 }
                 else { $state.reusedHead = $true }
             }
-            finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
+            finally {
+                Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+                if ($rootIndexCandidate -and -not $state.stopRequired) {
+                    Remove-Item -LiteralPath $rootIndexCandidate -Force -ErrorAction SilentlyContinue
+                }
+            }
         }
         else { $state.reusedHead = [bool]$state.headBefore }
 
-        Assert-IndexPreserved -Project $Project -Before $indexBefore
+        if ($state.rootCommitCreated) { Assert-PreexistingIndexEntries -Project $Project -Before $indexBefore -IndexFile $null }
+        else { Assert-IndexPreserved -Project $Project -Before $indexBefore }
         if ($Options.StartLead) {
             $state.phase = 'launch'
             if (-not $state.headAfter) { throw 'Cannot launch GAD Lead without a Git HEAD.' }
             if (-not $needsCommit) {
                 foreach ($entry in $manifest) {
                     $show = Invoke-Git -Project $Project -Arguments @('ls-tree', '-r', 'HEAD', '--', $entry.path)
-                    $oid = Assert-GitSuccess -Result (Invoke-Git -Project $Project -Arguments @('hash-object', '--', $entry.source)) -Action 'Hash manifest file'
+                    $oid = Get-RawBlobId -Project $Project -Path $entry.source -Write:$false
                     if ($show.ExitCode -ne 0 -or $show.Text -notmatch ('^100644 blob ' + [regex]::Escape($oid) + "`t")) {
                         $state.commitRequired = $true
                         throw 'Existing HEAD does not contain the exact installed manifest; rerun with --commit.'
@@ -597,7 +684,9 @@ function Invoke-Init {
     }
     catch {
         $state.error = $_.Exception.Message
-        $state.nextAction = if ($state.commitRequired) {
+        $state.nextAction = if ($state.stopRequired) {
+            'STOP: preserve the repository and retained index candidate for manual inspection; do not retry automatically.'
+        } elseif ($state.commitRequired) {
             'Rerun init with --commit --start-lead --mode bootstrap.'
         } elseif ($state.phase -eq 'commit' -and $state.error -match 'identity|ident name|auto-detect email|user\.name|user\.email') {
             'Configure Git user.name and user.email for this repository, then retry the same command.'
@@ -608,7 +697,13 @@ function Invoke-Init {
         }
         $state.headAfter = Get-GitHead -Project $Project
         if ($null -ne $indexBefore) {
-            try { $state.indexPreserved = ((Get-IndexFingerprint -Project $Project) -ceq $indexBefore) }
+            try {
+                if ($state.rootCommitCreated) {
+                    Assert-PreexistingIndexEntries -Project $Project -Before $indexBefore -IndexFile $null
+                    $state.indexPreserved = $true
+                }
+                else { $state.indexPreserved = ((Get-IndexFingerprint -Project $Project) -ceq $indexBefore) }
+            }
             catch { $state.indexPreserved = $false }
         }
     }

@@ -45,6 +45,22 @@ function IndexBytes([string]$Repo) {
     if (-not (Test-Path -LiteralPath $path)) { return '<absent>' }
     return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
 }
+function Check-InstalledIndex([string]$Repo, $Manifest) {
+    foreach ($entry in $Manifest) {
+        $oid = Run-Git -Repo $Repo -Argv @('hash-object','--no-filters','--',(Join-Path $Repo ($entry.path.Replace('/','\'))))
+        $indexed = Run-Git -Repo $Repo -Argv @('ls-files','--stage','--',$entry.path)
+        Assert ($indexed -eq "100644 $oid 0`t$($entry.path)") "Installed path missing from primary index: $($entry.path)"
+    }
+    $stagedInstall = Run-Git -Repo $Repo -Argv @('diff','--cached','--name-only','HEAD','--','gad-lead','.agents/skills')
+    Assert (-not $stagedInstall) 'Committed install appears as a staged deletion or modification.'
+    $status = Run-Git -Repo $Repo -Argv @('status','--porcelain=v1','--untracked-files=all','--','gad-lead','.agents/skills')
+    foreach ($line in @($status -split "`n" | Where-Object { $_ })) {
+        $path = $line.Substring(3)
+        if (@($Manifest | Where-Object { $_.path -ceq $path }).Count -gt 0) {
+            Assert ($line -notmatch '^(D |\?\?)') "Committed install appears staged-deleted or untracked: $path"
+        }
+    }
+}
 function Run-Init([string]$Repo, [string[]]$Flags) {
     $lines = @(& $installer init --project $Repo --package $package --gad-core $core @Flags --json)
     $code = $LASTEXITCODE
@@ -66,7 +82,7 @@ function Check-Root([string]$Repo, $Manifest) {
         $blob = ($mode -split ' ')[2].Split("`t")[0]
         $path = Join-Path $Repo ($entry.path.Replace('/','\'))
         Assert ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -eq $entry.sha256) "Worktree byte mismatch: $($entry.path)"
-        $oid = Run-Git -Repo $Repo -Argv @('hash-object','--',$path)
+        $oid = Run-Git -Repo $Repo -Argv @('hash-object','--no-filters','--',$path)
         Assert ($oid -eq $blob) "Tree blob mismatch: $($entry.path)"
     }
 }
@@ -75,6 +91,7 @@ foreach ($file in @('README.md','GAD_LEAD_OPERATING_MODEL.md','GAD_AGENT_POLICY.
     Put-File (Join-Path $package $file) "fixture $file"
 }
 Put-File (Join-Path $package 'gad-lead.cmd') ("@echo off`r`nexit /b 17`r`n")
+Put-File (Join-Path $package 'gad-project.cmd') ("@echo off`r`nexit /b 0`r`n")
 Put-File (Join-Path $package '.hidden') 'hidden payload'
 Put-File (Join-Path $package "$([char]0x8BF4)$([char]0x660E).txt") 'unicode payload'
 foreach ($skill in $skills) { Put-File (Join-Path $core "skills\$skill\SKILL.md") "skill $skill" }
@@ -98,16 +115,19 @@ try {
     $count++
 
     $repo = New-Repo 'nohead-commit'
+    [void](Run-Git -Repo $repo -Argv @('config','core.autocrlf','true'))
     Put-File (Join-Path $repo 'outside.txt') 'staged user file'
     [void](Run-Git -Repo $repo -Argv @('add','outside.txt'))
     Put-File (Join-Path $repo 'ignored.txt') 'ignored user file'
     Put-File (Join-Path $repo '.gitignore') "ignored.txt`ngad-lead/`n.agents/`n"
     Put-File (Join-Path $repo '.agents\skills\unmanaged\keep.txt') 'outside managed roots'
     $before = IndexBytes $repo
+    $outsideBefore = Run-Git -Repo $repo -Argv @('ls-files','--stage','--','outside.txt')
     $run = Run-Init $repo @('--commit')
     Assert ($run.code -eq 0 -and $run.data.rootCommitCreated -and $run.data.indexPreserved) 'No-HEAD commit row failed.'
-    Assert ((IndexBytes $repo) -eq $before) 'Root commit changed caller index bytes.'
+    Assert ((Run-Git -Repo $repo -Argv @('ls-files','--stage','--','outside.txt')) -eq $outsideBefore) 'Root commit changed preexisting index entry.'
     Check-Root $repo $run.data.manifest
+    Check-InstalledIndex $repo $run.data.manifest
     Assert ((Get-Content -LiteralPath (Join-Path $repo '.agents\skills\unmanaged\keep.txt') -Raw) -eq 'outside managed roots') 'Unmanaged skill changed.'
     $evidence = [pscustomobject]@{
         repository=$repo
@@ -116,6 +136,8 @@ try {
         head=$run.data.headAfter
         indexSha256Before=$before
         indexSha256After=(IndexBytes $repo)
+        outsideIndexEntryBefore=$outsideBefore
+        outsideIndexEntryAfter=(Run-Git -Repo $repo -Argv @('ls-files','--stage','--','outside.txt'))
         manifest=$run.data.manifest
         porcelainV2=(Run-Git -Repo $repo -Argv @('status','--porcelain=v2'))
         indexStage=(Run-Git -Repo $repo -Argv @('ls-files','--stage'))
@@ -132,12 +154,14 @@ try {
     $run = Run-Init $repo @('--commit','--start-lead','--mode','bootstrap')
     Assert ($run.code -ne 0 -and $run.data.rootCommitCreated -and $run.data.phase -eq 'launch' -and $run.data.leadLaunchAttempted) 'Explicit commit plus no-HEAD launch row failed.'
     Check-Root $repo $run.data.manifest
+    Check-InstalledIndex $repo $run.data.manifest
     $count++
 
     $repo = New-Repo 'nohead-launch-failure'
     $run = Run-Init $repo @('--start-lead','--mode','bootstrap')
     Assert ($run.code -ne 0 -and $run.data.phase -eq 'launch' -and $run.data.rootCommitCreated -and $run.data.leadLaunchAttempted -and -not $run.data.leadStarted) 'Launch failure postcondition failed.'
     Check-Root $repo $run.data.manifest
+    Check-InstalledIndex $repo $run.data.manifest
     $first = Head $repo
     $retry = Run-Init $repo @('--start-lead','--mode','bootstrap')
     Assert ($retry.code -ne 0 -and -not $retry.data.committed -and (Head $repo) -eq $first) 'Launch retry duplicated root commit.'
@@ -204,10 +228,15 @@ try {
     [void](New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination))
     Copy-Item -LiteralPath (Join-Path $package 'README.md') -Destination $destination
     [void](Run-Git -Repo $repo -Argv @('add','gad-lead/README.md'))
-    $before = IndexBytes $repo
+    Put-File (Join-Path $repo 'intent.txt') 'intent-to-add user file'
+    [void](Run-Git -Repo $repo -Argv @('add','-N','intent.txt'))
+    $intentBefore = Run-Git -Repo $repo -Argv @('ls-files','--stage','--debug','--','intent.txt')
+    $before = Run-Git -Repo $repo -Argv @('ls-files','--stage','--','gad-lead/README.md')
     $run = Run-Init $repo @('--commit')
-    Assert ($run.code -eq 0 -and $run.data.rootCommitCreated -and (IndexBytes $repo) -eq $before) 'Identical staged destination was not preserved.'
+    Assert ($run.code -eq 0 -and $run.data.rootCommitCreated -and (Run-Git -Repo $repo -Argv @('ls-files','--stage','--','gad-lead/README.md')) -eq $before) 'Identical staged destination was not preserved.'
+    Assert ((Run-Git -Repo $repo -Argv @('ls-files','--stage','--debug','--','intent.txt')) -eq $intentBefore) 'Intent-to-add user entry changed.'
     Check-Root $repo $run.data.manifest
+    Check-InstalledIndex $repo $run.data.manifest
     $count++
 
     $repo = New-Repo 'staged-conflict'
@@ -239,7 +268,7 @@ try {
     $realGit = (Get-Command git.exe).Source
     $shimDir = Join-Path $scratch 'git-shim'
     [void](New-Item -ItemType Directory -Path $shimDir)
-    $shim = "@echo off`r`nif not `"%GIT_INDEX_FILE%`"==`"`" if `"%6`"==`"add`" exit /b 44`r`n`"$realGit`" %*`r`n"
+    $shim = "@echo off`r`nif not `"%GIT_INDEX_FILE%`"==`"`" if `"%6`"==`"update-index`" exit /b 44`r`n`"$realGit`" %*`r`n"
     [System.IO.File]::WriteAllText((Join-Path $shimDir 'git.cmd'), $shim, [System.Text.Encoding]::ASCII)
     $oldPath = $env:PATH
     try {
