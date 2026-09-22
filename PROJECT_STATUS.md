@@ -2,7 +2,7 @@
 
 ## Current project state
 
-- **Project State:** `BASELINED`. Exact G2 baseline has been promoted; this is the transitional state during G2 completion.
+- **Project State:** `ACTIVE`. G2 completion is synchronized after the separately committed BASELINED transition.
 - **G1 批准对象:** `gad-orca-g1-2026-09-22-a2-02` @ `49ff1c6d37cb13bd8256124b15d6d2055ca367d8`。
 - **正式项目定义:** 主线 `PROJECT.md`，由提交 `5e71265bd203a0b02e2136d1d613e1552c210e1c` 建立；其内容为上述 G1 批准的项目定义。
 - **G2 approval:** Exact Architecture / Governance Project Baseline approved. Architecture source: `cd436991a9abf76ea93cc3725dc14be2154a6042:.gad/proposals/G2_ARCHITECTURE_BASELINE_DRAFT.md`. Governance sources: `cb66ae9d8bb04de5514e7ba5b49cf672040e6ad4:.gad/proposals/G2_PROJECT_RULES_BASELINE_DRAFT.md` and `cb66ae9d8bb04de5514e7ba5b49cf672040e6ad4:.gad/proposals/G2_DEVELOPMENT_WORKFLOW_BASELINE_DRAFT.md`. Exactly two complete A2 header lines were removed from each blob; all remaining bytes were promoted.
@@ -13,4 +13,4 @@
 
 ## Next legal step
 
-Synchronize project state to ACTIVE; do not infer product Batch authorization.
+GAD Lead may coordinate the next legal work under the formal baseline; product Batch work remains subject to its applicable governance and Human Gates.
