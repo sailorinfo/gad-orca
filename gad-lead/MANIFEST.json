@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "name": "GAD Lead",
+  "version": "0.4.0-pilot",
+  "layout": "single-directory",
+  "install_directory": "gad-lead",
+  "entrypoints": {
+    "lead": "gad-lead.cmd",
+    "project": "gad-project.cmd"
+  },
+  "tools": {
+    "lead": "tools/gad-lead.ps1",
+    "project": "tools/gad-project.ps1"
+  },
+  "required_skills": [
+    "gad-governance",
+    "gad-project-inception",
+    "gad-system-architecture",
+    "gad-implementation-readiness",
+    "gad-solution-research"
+  ],
+  "modes": [
+    "shadow",
+    "bootstrap",
+    "active"
+  ],
+  "commands": [
+    "start",
+    "resume",
+    "transition",
+    "status",
+    "doctor",
+    "agent",
+    "help",
+    "version"
+  ],
+  "behavior": {
+    "bootstrap_active_autonomy_loop": true,
+    "resume_wakes_idle_existing_lead": true,
+    "user_is_not_worker_message_bus": true
+  },
+  "agent_preference": {
+    "file": "GAD_AGENT_POLICY.conf",
+    "roles": [
+      "lead",
+      "implementation",
+      "review",
+      "other"
+    ],
+    "fallback": "orca-default",
+    "applies_to_existing_live_session": false,
+    "catalog_behavior": "conservative-current-orca-builtins",
+    "invalid_or_disabled": "fallback-to-orca-default",
+    "intentional_default_warning": false
+  }
+}
