@@ -13,7 +13,7 @@
 
 ## First product delivery batch — no-HEAD Bootstrap
 
-- **Batch state:** `GREEN`. Project state remains `ACTIVE`. G5 accepted the exact implementation and authorized the limited integration and mechanical state/result synchronization; mainline integration and verification are complete. `CLOSED` remains pending worktree/process cleanup disposition.
+- **Batch state:** `CLOSED`. Project state remains `ACTIVE`. G5 accepted the exact implementation and authorized the limited integration and mechanical state/result synchronization; mainline integration and verification are complete. GAD Lead settled the worktree/process cleanup disposition and the Batch artifact lifecycle is complete.
 - **G3 approval:** The user explicitly approved the exact file `3cdc94682b2647dd96dbb591905fed3c83f8b165:.gad/proposals/READINESS_FIRST_BOOTSTRAP_A2.md` (Git blob `92b4dc6236d207937ded7153eac333e9af89a7cc`) for this first Batch, authorizing exact baseline establishment and the bounded implementation and verification actions in that file.
 - **Formal execution baseline:** `batches/FIRST_BOOTSTRAP_EXECUTION_BASELINE.md`; Git blob `92b4dc6236d207937ded7153eac333e9af89a7cc`. It is a byte-for-byte copy of the approved A2 file. Its original A2/draft wording remains for exact-byte traceability; the G3 approval and this governed state record establish its formal baseline status.
 - **Governance classification:** `C2 Module / R3 High / P2 STRICT`. G5 was explicitly approved for exact implementation `5c4270cab85811ed43db4445bb134882a1ab9fa0` and the limited integration and mechanical synchronization. A material deviation from the approved scope or controlled project baselines requires governance reassessment and any applicable G4 approval.
@@ -21,4 +21,4 @@
 
 ## Next legal step
 
-GAD Lead verifies this mechanical result/status candidate, promotes it to mainline under the approved G5 action package, and determines the lawful cleanup or intentional-retention disposition for existing Worker worktrees and processes. Do not mark the batch `CLOSED` until that condition and artifact lifecycle are settled.
+GAD Lead verifies this mechanical closure candidate and promotes only these result/status changes to mainline under the approved G5 action package. Batch and disposable test child worktrees, branches, evidence commits, repositories, and indices are intentionally retained for audit; their workspaces are completed and their terminals closed. Parent GAD Lead sessions remain active for coordination, and unrelated G1/G2 worktrees remain outside this Batch. No push, tag, release, deletion, or new Batch occurred. The final remote push remains a separate decision.

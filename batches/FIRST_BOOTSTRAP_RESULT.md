@@ -1,7 +1,7 @@
 # First Bootstrap Batch Result
 
 - **Project state:** `ACTIVE`.
-- **Batch verdict:** `GREEN`; `CLOSED` is pending worktree/process cleanup disposition and completion of this result/status promotion.
+- **Batch verdict:** `CLOSED`; G5 acceptance, mainline integration, verification, evidence retention, worktree/process disposition, and result/status lifecycle are settled.
 - **Governance classification:** `C2 Module / R3 High / P2 STRICT`.
 - **Approved G3 baseline:** `batches/FIRST_BOOTSTRAP_EXECUTION_BASELINE.md`, Git blob `92b4dc6236d207937ded7153eac333e9af89a7cc`; exact approved source `3cdc94682b2647dd96dbb591905fed3c83f8b165:.gad/proposals/READINESS_FIRST_BOOTSTRAP_A2.md`.
 - **G5 acceptance:** User explicitly approved exact implementation `5c4270cab85811ed43db4445bb134882a1ab9fa0`, its previously described limited integration, and mechanical `RESULT.md` / `PROJECT_STATUS.md` synchronization. No broader action is inferred.
@@ -16,4 +16,4 @@
 
 ## Closure condition
 
-Evidence and the formal baseline are retained in Git. Existing Worker worktrees remain retained, and no cleanup or intentional-retention disposition has been established for them and their processes. `GREEN` records accepted, integrated, verified delivery; `CLOSED` requires GAD Lead to settle that disposition and complete the artifact/status lifecycle. This record authorizes no worktree deletion, process cleanup, push, tag, or release.
+Evidence and the formal baseline are retained in Git. GAD Lead intentionally retained the eight Batch worker worktrees and branches, four disposable test gad-lead children, four disposable test gad-inception children, and their evidence commits, repositories, and indices for audit. All eight Batch worker workspaces and all eight disposable test child workspaces are marked completed with no live terminals; the cleanup worktree is also completed with its terminal closed. Parent GAD Lead sessions remain active for coordination, and unrelated G1/G2 worktrees remain outside this Batch. No worktree or repository deletion, push, tag, release, or new Batch occurred. `CLOSED` records the settled cleanup and artifact lifecycle; final remote push requires a separate decision.
