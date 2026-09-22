@@ -21,4 +21,12 @@
 
 ## Next legal step
 
-G5 closure is complete: the first product delivery Batch is `CLOSED`, and project state remains `ACTIVE`. The exact closure candidate `d4e87506aec889e1596c5effc06e101f82fd9360` is already on main; no promotion is pending. No new product Batch has been opened. Batch and disposable test child worktrees, branches, evidence commits, repositories, and indices are intentionally retained for audit; their workspaces are completed and their terminals closed. Parent GAD Lead sessions remain active for coordination, and unrelated G1/G2 worktrees remain outside this Batch. No push, tag, release, or deletion has occurred. An exact main push requires separate explicit approval before execution.
+The first Bootstrap Batch remains `CLOSED`; the LEAN-01 Runtime & Lifecycle Batch is now `IMPLEMENTING` under the separately approved G3 baseline below. The project remains `ACTIVE`. Current Git and Orca inventories show only main and gad-lead Worktrees for this repository before LEAN-01 implementation creation. The user reports historical Worker/Worktree/Branch and disposable test assets cleaned or archived after Bootstrap closure; detailed disposal counts and archive locations are not established in this status record. No LEAN-01 remote push, tag, release, integration, or production deletion is authorized by G3.
+
+## LEAN-01 Runtime & Lifecycle Batch
+
+- **State:** `IMPLEMENTING`. This records the user's exact G3 approval; it does not grant G5, integration, or production cleanup.
+- **G4:** Project rules/workflow candidate blobs `e889efa2a31fc00cafd2cbec6f14ef68ed0f4507` and `847ec125531364cb0196a8907589c89415cdf6c1` were promoted on main at `f19e2a22bfe13eb8266d982ab66de45a1ef7cf00`.
+- **G3:** User explicitly approved proposal `9a6c0480bb05fd6856999ef11dcd738cac13d99d:.gad/proposals/LEAN01_G3_EXECUTION_A2.md`, Git blob `2990fac65a6c20f71d664b48b47926aafd7ea94d`. Exact bytes were promoted to `batches/LEAN01_EXECUTION_BASELINE.md` at `25aa9e682052a139b017b26e0d72916afa66c5ac`.
+- **Governance:** `C3 System / R3 High / P2 STRICT`; G5 is required before acceptance/integration. Worktree cap 4; up to 2 new Branches; 0 dedicated mechanical Workers. Starting topology was main + gad-lead. One implementation Worktree was created by Orca under Lead supervision.
+- **Next legal action:** Supervise bounded implementation and V1–V8 verification; freeze a precise implementation commit, then independent Review in the fourth Worktree. Stop at a material deviation or genuine blocker. Do not integrate or perform production cleanup before G5.
