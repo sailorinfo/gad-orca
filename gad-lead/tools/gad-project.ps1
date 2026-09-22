@@ -487,13 +487,57 @@ function Install-RootIndex {
     }
 }
 
+function Invoke-OrcaRead {
+    param([string]$Project, [string[]]$Arguments)
+    $result = Invoke-Native -File 'orca' -Arguments ($Arguments + @('--json')) -WorkingDirectory $Project
+    if ($result.ExitCode -ne 0) { throw "Orca inspection failed: $($result.Text)" }
+    try { $data = $result.Text | ConvertFrom-Json }
+    catch { throw 'Orca inspection returned invalid JSON; no Lead launch was attempted.' }
+    if (-not $data.ok) { throw 'Orca inspection did not succeed; no Lead launch was attempted.' }
+    return $data.result
+}
+
+function Find-ReusableBootstrapLead {
+    param([string]$Project, [string]$Head)
+    $current = (Invoke-OrcaRead -Project $Project -Arguments @('worktree', 'current')).worktree
+    if (-not $current -or -not $current.id -or -not $current.repoId) {
+        throw 'Orca could not identify the project worktree; no Lead launch was attempted.'
+    }
+    $listed = Invoke-OrcaRead -Project $Project -Arguments @('worktree', 'list', '--repo', "id:$($current.repoId)")
+    $leads = @($listed.worktrees | Where-Object {
+        $leaf = if ($_.path) { [System.IO.Path]::GetFileName(([string]$_.path).Replace('/', '\')) } else { '' }
+        $_.repoId -eq $current.repoId -and ($_.displayName -eq 'gad-lead' -or $leaf -eq 'gad-lead')
+    })
+    if ($leads.Count -eq 0) { return $null }
+    if ($leads.Count -ne 1) { throw 'Multiple GAD Lead worktrees exist; resolve the Orca conflict before retrying.' }
+    $lead = $leads[0]
+    if ($lead.parentWorktreeId -ne $current.id -or $lead.head -ne $Head -or $lead.baseRef -ne $Head) {
+        throw 'Existing GAD Lead worktree lineage or Git base differs from the committed HEAD; resolve it before retrying.'
+    }
+    $listedTerminals = Invoke-OrcaRead -Project $Project -Arguments @('terminal', 'list', '--worktree', "id:$($lead.id)")
+    $terminals = @($listedTerminals.terminals)
+    if ($terminals.Count -eq 0) { return $null }
+    if ($terminals.Count -ne 1) { throw 'Multiple GAD Lead terminals exist; no additional terminal was started.' }
+    $terminal = $terminals[0]
+    if ($terminal.worktreeId -ne $lead.id -or -not $terminal.handle -or
+        $terminal.orphaned -or $terminal.connected -ne $true -or $terminal.writable -ne $true -or
+        -not $terminal.agentIdentity -or $terminal.agentIdentity -ne $lead.createdWithAgent) {
+        throw 'Existing GAD Lead terminal identity or liveness is uncertain; no additional terminal was started.'
+    }
+    if ($terminal.title -match '^GAD Lead \[(shadow|active)\]$') {
+        throw 'Existing GAD Lead terminal has a different explicit mode; no additional terminal was started.'
+    }
+    return [pscustomobject]@{ worktreeId=$lead.id; terminalHandle=$terminal.handle; terminalTitle=$terminal.title }
+}
+
 function Invoke-Init {
     param($Options, [string]$Project, [string]$PackageDir, [string]$GadCore)
     $state = [ordered]@{
         ok=$false; command='init'; project=$Project; dryRun=[bool]$Options.DryRun
         phase='validate'; headBefore=$null; headAfter=$null; installed=$false
         committed=$false; rootCommitCreated=$false; commit=$null; reusedHead=$false
-        commitRequired=$false; leadLaunchAttempted=$false; leadStarted=$false
+        commitRequired=$false; leadLaunchAttempted=$false; leadStarted=$false; leadReused=$false
+        leadWorktreeId=$null; leadTerminalHandle=$null
         gadLeadStarted=$false; indexPreserved=$true; copied=@(); reused=@()
         conflicting=@(); manifest=@(); plannedCommit=$false; neededCommit=$false; plannedLaunch=[bool]$Options.StartLead
         nextAction=$null; error=$null; stopRequired=$false
@@ -672,12 +716,26 @@ function Invoke-Init {
                     }
                 }
             }
-            $state.leadLaunchAttempted = $true
-            $launcher = Join-Path $Project 'gad-lead\gad-lead.cmd'
-            $lead = Invoke-Native -File $launcher -Arguments @('start', '--mode', $Options.Mode, '--project', $Project, '--activate') -WorkingDirectory $Project
-            [void](Assert-GitSuccess -Result $lead -Action 'GAD Lead start')
-            $state.leadStarted = $true
-            $state.gadLeadStarted = $true
+            if ($state.headBefore -and -not $state.committed) {
+                # Orca may rename the original Lead terminal after launch. Use
+                # worktree lineage, HEAD and agent identity for a safe retry.
+                $existingLead = Find-ReusableBootstrapLead -Project $Project -Head $state.headAfter
+                if ($existingLead) {
+                    $state.leadReused = $true
+                    $state.leadStarted = $true
+                    $state.gadLeadStarted = $true
+                    $state.leadWorktreeId = $existingLead.worktreeId
+                    $state.leadTerminalHandle = $existingLead.terminalHandle
+                }
+            }
+            if (-not $state.leadReused) {
+                $state.leadLaunchAttempted = $true
+                $launcher = Join-Path $Project 'gad-lead\gad-lead.cmd'
+                $lead = Invoke-Native -File $launcher -Arguments @('start', '--mode', $Options.Mode, '--project', $Project, '--activate') -WorkingDirectory $Project
+                [void](Assert-GitSuccess -Result $lead -Action 'GAD Lead start')
+                $state.leadStarted = $true
+                $state.gadLeadStarted = $true
+            }
         }
         $state.ok = $true
         $state.nextAction = if (-not $state.headAfter) { 'Run init --commit or init --start-lead --mode bootstrap to create the root commit.' } else { 'Installation complete.' }

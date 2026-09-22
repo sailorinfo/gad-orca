@@ -304,6 +304,42 @@ try {
     Assert ($retry.code -eq 0 -and $retry.data.rootCommitCreated) 'Copy failure retry failed.'
     $count++
 
+    $repo = New-Repo 'renamed-lead-retry'
+    $installed = Run-Init $repo @('--commit')
+    Assert ($installed.code -eq 0 -and $installed.data.rootCommitCreated) 'Could not establish retry fixture root.'
+    $headBeforeRetry = Head $repo
+    $indexBeforeRetry = IndexBytes $repo
+    $repoId = 'fixture-bootstrap-repo'
+    $rootId = "${repoId}::$repo"
+    $leadId = "${repoId}::$(Join-Path $scratch 'fixture-child\gad-lead')"
+    $orcaDir = Join-Path $scratch 'orca-shim'
+    [void](New-Item -ItemType Directory -Path $orcaDir)
+    $currentJson = @{ ok=$true; result=@{worktree=@{id=$rootId;repoId=$repoId}} } | ConvertTo-Json -Depth 8 -Compress
+    $worktreesJson = @{ ok=$true; result=@{worktrees=@(@{id=$leadId;repoId=$repoId;path=(Join-Path $scratch 'fixture-child\gad-lead');displayName='gad-lead';parentWorktreeId=$rootId;head=$headBeforeRetry;baseRef=$headBeforeRetry;createdWithAgent='codex'})} } | ConvertTo-Json -Depth 8 -Compress
+    $terminal = @{handle='term_fixture_lead';worktreeId=$leadId;title='Agent-renamed Lead title';connected=$true;writable=$true;orphaned=$false;agentIdentity='codex'}
+    $terminalJson = @{ ok=$true; result=@{terminals=@($terminal)} } | ConvertTo-Json -Depth 8 -Compress
+    [IO.File]::WriteAllText((Join-Path $orcaDir 'current.json'),$currentJson,[Text.Encoding]::ASCII)
+    [IO.File]::WriteAllText((Join-Path $orcaDir 'worktrees.json'),$worktreesJson,[Text.Encoding]::ASCII)
+    [IO.File]::WriteAllText((Join-Path $orcaDir 'terminals.json'),$terminalJson,[Text.Encoding]::ASCII)
+    $orcaShim = "@echo off`r`nif `"%1 %2`"==`"worktree current`" (type `"$orcaDir\current.json`" & exit /b 0)`r`nif `"%1 %2`"==`"worktree list`" (type `"$orcaDir\worktrees.json`" & exit /b 0)`r`nif `"%1 %2`"==`"terminal list`" (type `"$orcaDir\terminals.json`" & exit /b 0)`r`nexit /b 19`r`n"
+    [IO.File]::WriteAllText((Join-Path $orcaDir 'orca.cmd'),$orcaShim,[Text.Encoding]::ASCII)
+    $oldPath = $env:PATH
+    try {
+        $env:PATH = "$orcaDir;$oldPath"
+        Assert ((Get-Command orca).Source -eq (Join-Path $orcaDir 'orca.cmd')) 'Orca retry shim was not selected.'
+        $retry = Run-Init $repo @('--start-lead','--mode','bootstrap')
+        Assert ($retry.code -eq 0 -and $retry.data.leadReused -and -not $retry.data.leadLaunchAttempted -and $retry.data.leadTerminalHandle -eq 'term_fixture_lead') 'Renamed single Lead was not reused.'
+        $retryWithCommit = Run-Init $repo @('--commit','--start-lead','--mode','bootstrap')
+        Assert ($retryWithCommit.code -eq 0 -and $retryWithCommit.data.leadReused -and -not $retryWithCommit.data.committed) 'Explicit-commit retry did not reuse Lead.'
+        $terminalJson = @{ ok=$true; result=@{terminals=@($terminal, $terminal)} } | ConvertTo-Json -Depth 8 -Compress
+        [IO.File]::WriteAllText((Join-Path $orcaDir 'terminals.json'),$terminalJson,[Text.Encoding]::ASCII)
+        $conflict = Run-Init $repo @('--start-lead','--mode','bootstrap')
+        Assert ($conflict.code -ne 0 -and $conflict.data.phase -eq 'launch' -and -not $conflict.data.leadLaunchAttempted) 'Multiple Lead terminals were not blocked.'
+    }
+    finally { $env:PATH = $oldPath }
+    Assert ((Head $repo) -eq $headBeforeRetry -and (IndexBytes $repo) -eq $indexBeforeRetry) 'Lead retry changed Git HEAD or primary index.'
+    $count++
+
     $newPath = Join-Path $scratch 'new-regression'
     $newLines = @(& $installer new --project $newPath --package $package --gad-core $core --start-lead --json)
     Assert ($LASTEXITCODE -ne 0 -and $newLines.Count -eq 1 -and -not (Test-Path $newPath)) 'new --start-lead without --commit regression.'
