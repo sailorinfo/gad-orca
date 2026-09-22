@@ -13,12 +13,12 @@
 
 ## First product delivery batch — no-HEAD Bootstrap
 
-- **Batch state:** `BASELINED`. Project state remains `ACTIVE`.
+- **Batch state:** `GREEN`. Project state remains `ACTIVE`. G5 accepted the exact implementation and authorized the limited integration and mechanical state/result synchronization; mainline integration and verification are complete. `CLOSED` remains pending worktree/process cleanup disposition.
 - **G3 approval:** The user explicitly approved the exact file `3cdc94682b2647dd96dbb591905fed3c83f8b165:.gad/proposals/READINESS_FIRST_BOOTSTRAP_A2.md` (Git blob `92b4dc6236d207937ded7153eac333e9af89a7cc`) for this first Batch, authorizing exact baseline establishment and the bounded implementation and verification actions in that file.
 - **Formal execution baseline:** `batches/FIRST_BOOTSTRAP_EXECUTION_BASELINE.md`; Git blob `92b4dc6236d207937ded7153eac333e9af89a7cc`. It is a byte-for-byte copy of the approved A2 file. Its original A2/draft wording remains for exact-byte traceability; the G3 approval and this governed state record establish its formal baseline status.
-- **Governance classification:** `C2 Module / R3 High / P2 STRICT`. G5 is required before acceptance and integration. A material deviation from the approved scope or controlled project baselines requires governance reassessment and any applicable G4 approval.
-- **Authorized next action:** After GAD Lead verifies this promotion, dispatch a bounded implementation Worker for `gad-lead/tools/gad-project.ps1` and focused fixtures under `gad-lead/tests/` if needed. Perform the approved verification matrix in disposable repositories, followed by independent verification and review. Do not treat this baseline promotion as product implementation or G5 acceptance.
+- **Governance classification:** `C2 Module / R3 High / P2 STRICT`. G5 was explicitly approved for exact implementation `5c4270cab85811ed43db4445bb134882a1ab9fa0` and the limited integration and mechanical synchronization. A material deviation from the approved scope or controlled project baselines requires governance reassessment and any applicable G4 approval.
+- **G5 and delivery evidence:** Exact target `5c4270cab85811ed43db4445bb134882a1ab9fa0`; independent PASS verifier `a81ec6d4831b15f3c5fa456c049bae1fb0422001:.gad/evidence/BOOTSTRAP_REVERIFICATION_2.md`; independent REVIEW_PASS `b49b596af271d71588e5ad81ba9bf0f912b36c39:.gad/evidence/BOOTSTRAP_REVIEW.md`. Earlier FAIL evidence at `aef0543` and `4967f42` remains retained and was addressed by implementation repairs. Integration fast-forwarded mainline from `6b581a7e7c38d046819ebea5f57790ab43c6a9b6` to the exact target; the integration Worker ran `PASS 19 bootstrap matrix cases` on mainline. See `batches/FIRST_BOOTSTRAP_RESULT.md`.
 
 ## Next legal step
 
-GAD Lead verifies the exact promoted blob and this state synchronization, then coordinates the bounded first-Batch implementation and verification under the G3-approved execution baseline. G5 remains required before acceptance or integration.
+GAD Lead verifies this mechanical result/status candidate, promotes it to mainline under the approved G5 action package, and determines the lawful cleanup or intentional-retention disposition for existing Worker worktrees and processes. Do not mark the batch `CLOSED` until that condition and artifact lifecycle are settled.
