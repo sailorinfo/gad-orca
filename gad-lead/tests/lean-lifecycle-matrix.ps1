@@ -1,4 +1,4 @@
-﻿#requires -Version 5.1
+#requires -Version 5.1
 param([string]$Control = (Join-Path $PSScriptRoot '..\tools\gad-control.ps1'))
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
@@ -28,8 +28,8 @@ try {
     G @('add','approval.txt') | Out-Null; G @('commit','-m','approve target') | Out-Null
     $approval=G @('rev-parse','HEAD'); $proof=G @('rev-parse','HEAD:approval.txt')
     $p=[ordered]@{repo=$repo;action='promote';gate='G3';mainRef='refs/heads/main';approvalCommit=$approval;approvalPath='approval.txt';approvalBlob=$proof;approvalPhrase=$phrase;target="target.txt@$blob";path='target.txt';blob=$blob;expectedBlob=$old}
-    $q=[ordered]@{} + $p;$q.approvalPhrase='G3 wrong';$r=Run $q
-    Check (-not $r.ok -and (Get-Content (Join-Path $repo 'target.txt') -Raw) -eq 'old') 'V1 wrong approval phrase mutated target';$results.V1='PASS (wrong approval phrase; bytes unchanged)'
+    $q=[ordered]@{} + $p;$q.target='wrong';$r=Run $q
+    Check (-not $r.ok -and (Get-Content (Join-Path $repo 'target.txt') -Raw) -eq 'old') 'V1 wrong target mutated bytes';$results.V1='PASS (wrong target; bytes unchanged)'
     $q=[ordered]@{} + $p;$q.blob=$old;$r=Run $q
     Check (-not $r.ok -and (G @('rev-parse','HEAD')) -eq $approval) 'V2 wrong blob was accepted'
     $r=Run $p;Check ($r.ok -and (G @('hash-object','target.txt')) -eq $blob) ("V2 promotion failed: " + ($r | ConvertTo-Json -Compress))
@@ -64,18 +64,18 @@ try {
     G @('add','approval.txt') | Out-Null;G @('commit','-m','fixture cleanup package') | Out-Null
     $cleanupApproval=G @('rev-parse','HEAD');$cleanupBlob=G @('rev-parse','HEAD:approval.txt')
     $q=[ordered]@{} + $p;$q.action='worktree-remove';$q.gate='G5';$q.target='unknown';$q.worktreeId='unknown';$q.worktreePath=$repo;$q.head=$approval;$q.completed='true';$q.evidenceRetained='true';$q.approvalCommit=$cleanupApproval;$q.approvalBlob=$cleanupBlob;$q.approvalPhrase='G5 unknown';$r=Run $q
-    Check (-not $r.ok -and $r.error -match 'Cannot remove main' -and (Test-Path $repo)) 'V3 main worktree guard failed';$results.V3='PASS (main Worktree removal refused; dirty/live Orca guards pending)'
+    Check (-not $r.ok -and $r.error -match 'Cannot remove main' -and (Test-Path $repo)) 'V3 main worktree guard failed';$results.V3='FIXTURE (main Worktree removal refused; dirty/live Orca evidence pending)'
     $q=[ordered]@{} + $p;$q.action='branch-delete';$q.gate='G5';$q.branch='refs/heads/unique';$q.target=$q.branch;$q.head=$approval;$q.evidenceRetained='true';$q.approvalCommit=$cleanupApproval;$q.approvalBlob=$cleanupBlob;$q.approvalPhrase='G5'
-    G @('branch','unique') | Out-Null;$r=Run $q;Check (-not $r.ok -and $r.error -match 'Branch ref drift' -and (G @('rev-parse','unique')) -eq $cleanupApproval) 'V4 branch SHA guard failed';$results.V4='PASS (branch SHA drift refused; Orca removal pending)'
+    G @('branch','unique') | Out-Null;$r=Run $q;Check (-not $r.ok -and $r.error -match 'Branch ref drift' -and (G @('rev-parse','unique')) -eq $cleanupApproval) 'V4 branch SHA guard failed';$results.V4='FIXTURE (branch SHA drift refused; Orca removal pending)'
     $q=[ordered]@{} + $p;$q.action='terminal-close';$q.gate='G5';$q.target='lead';$q.handle='lead';$q.role='lead';$q.completed='true';$q.evidenceRetained='true';$q.approvalCommit=$cleanupApproval;$q.approvalBlob=$cleanupBlob;$q.approvalPhrase='G5';$r=Run $q
-    Check (-not $r.ok -and $r.error -match 'Owner/completion/evidence') 'V5 Lead role guard failed';$results.V5='PASS (Lead role refused; completed/unknown Orca terminal paths pending)'
+    Check (-not $r.ok -and $r.error -match 'not demonstrable') 'V5 Lead role guard failed';$results.V5='FIXTURE (terminal cleanup refused; real Orca ownership/evidence pending)'
     $frozen=G @('rev-parse','HEAD');$review=Join-Path $root 'review';G @('worktree','add','--detach',$review,$frozen) | Out-Null
     Check ((& git -C $review rev-parse HEAD).Trim() -eq $frozen -and -not ((& git -C $review status --porcelain) -join '')) 'V6 frozen checkout invalid'
-    $results.V6='PASS (frozen Git checkout; Session isolation requires Orca Review evidence)'
-    $r=Run $p;Check ($r.ok -and -not $r.changed -and (G @('rev-parse','HEAD')) -eq $frozen) 'V7 retry changed state';$results.V7='PASS (promotion retry only; interrupted Orca lifecycle pending)'
+    $results.V6='FIXTURE (frozen Git checkout; Orca Review isolation pending)'
+    $r=Run $p;Check ($r.ok -and -not $r.changed -and (G @('rev-parse','HEAD')) -eq $frozen) 'V7 retry changed state';$results.V7='FIXTURE (promotion retry only; interrupted Orca lifecycle pending)'
     $metrics=[ordered]@{peakWorkers='2';peakWorktrees='4';newBranches='2';mechanicalWorkers='0';verificationCases='8';manualCoordination='0';elapsedSeconds='123';provenance='Git/Orca snapshots';bootstrapComparison='19 cases measured; others unknown'}
     foreach($key in @('peakWorkers','peakWorktrees','newBranches','mechanicalWorkers','verificationCases','manualCoordination','elapsedSeconds','provenance','bootstrapComparison')) { Check (-not [string]::IsNullOrWhiteSpace($metrics[$key])) "V8 missing $key" }
-    $results.V8='PASS (fixture field presence only; real metrics and Bootstrap comparison pending G5)'
+    $results.V8='FIXTURE (field presence only; real metrics and Bootstrap comparison pending G5)'
     $results | ConvertTo-Json -Compress
 } finally {
     # The disposable fixture is known and located beneath the freshly created temp root.
@@ -87,5 +87,3 @@ try {
         }
     }
 }
-
-

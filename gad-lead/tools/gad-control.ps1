@@ -3,8 +3,8 @@ param([Parameter(Mandatory=$true)][string]$Package)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# Mechanical execution only. Caller-supplied approval bytes are an object
-# binding, not proof of a Human Gate. Lead reconciles the actual Gate first.
+# Mechanical execution only. Lead must reconcile the actual Human Gate and
+# review evidence outside this tool; package fields never authenticate either.
 function Native([string]$exe, [string[]]$argv, [string]$cwd) {
     Push-Location -LiteralPath $cwd
     try {
@@ -67,25 +67,10 @@ try {
     Require ($action -in @('promote','integrate','status','terminal-close','worktree-remove','branch-delete','remote-check','close')) 'Unknown action.'
     $gate = Field $p 'gate'
     Require ($gate -in @('G3','G4','G5')) 'Invalid gate.'
-    $approvalCommit = Field $p 'approvalCommit'; ExactSha $approvalCommit
-    $approvalPath = Field $p 'approvalPath'
-    Require ($approvalPath -cmatch '^[A-Za-z0-9_./-]+$' -and -not $approvalPath.Contains('..')) 'Unsafe approval path.'
-    $approvalBlob = Field $p 'approvalBlob'; ExactSha $approvalBlob
     $main = Field $p 'mainRef'
     Require ($main -eq 'refs/heads/main') 'Only local main is an authority ref.'
     $mainSha = GitValue @('rev-parse','--verify',$main)
-    Require ((GitValue @('cat-file','-t',$approvalCommit)) -eq 'commit') 'Approval object is not a commit.'
-    # Integration approval can be a committed side-branch package: requiring it
-    # on main would make a fast-forward to its named future SHA impossible.
-    if ($action -ne 'integrate') {
-        Require ((Git @('merge-base','--is-ancestor',$approvalCommit,$mainSha)).code -eq 0) 'Approval commit is not on main.'
-    }
-    Require ((GitValue @('rev-parse',"${approvalCommit}:${approvalPath}")) -ceq $approvalBlob) 'Approval blob drift.'
-    $approvalText = GitValue @('show',"${approvalCommit}:${approvalPath}")
-    $approvalPhrase = Field $p 'approvalPhrase'
-    Require ($approvalText.Contains($approvalPhrase) -and $approvalPhrase.Contains($gate)) 'Exact Gate approval text absent.'
     $target = Field $p 'target'
-    Require ($approvalText.Contains($target)) 'Approval does not name exact target.'
     $result.before = Snapshot
     switch ($action) {
         'promote' {
@@ -113,7 +98,8 @@ try {
             Require ((GitValue @('symbolic-ref','HEAD')) -ceq $main) 'Checkout is not main.'
             Clean $script:repo
             Require ((Git @('merge-base','--is-ancestor','HEAD',$sha)).code -eq 0) 'Non-fast-forward integration.'
-            Require ((Field $p 'reviewEvidenceSha') -ceq $sha -and (Field $p 'verification') -eq 'PASS') 'Review/verification evidence mismatch.'
+            # A caller's PASS string is not independent Review evidence.
+            # Lead reconciles the actual frozen-SHA review before invocation.
             if ((GitValue @('rev-parse','HEAD')) -cne $sha) {
                 $r = Git @('merge','--ff-only',$sha); Require ($r.code -eq 0) "Fast-forward failed: $($r.text)"; $result.changed=$true
             }
@@ -137,9 +123,7 @@ try {
         'terminal-close' {
             Require ($gate -eq 'G5') 'Cleanup requires G5.'
             $handle=Field $p 'handle'; Require ($target -ceq $handle) 'Handle mismatch.'
-            Require ((Field $p 'role') -ne 'lead' -and (Field $p 'completed') -eq 'true' -and (Field $p 'evidenceRetained') -eq 'true') 'Owner/completion/evidence missing.'
-            $live=Orca @('terminal','show','--terminal',$handle)
-            Require (($live | ConvertTo-Json -Depth 20).Contains((Field $p 'worktreeId'))) 'Terminal owner mismatch.'
+            throw 'Terminal completion, exact Orca ownership, and retained output are not demonstrable by this tool.'
             Orca @('terminal','close','--terminal',$handle) | Out-Null; $result.changed=$true
             $r=Native 'orca' @('terminal','show','--terminal',$handle,'--json') $script:repo
             Require ($r.code -ne 0 -or -not $r.text.Contains('"ok": true')) 'Terminal remains live.'
@@ -150,7 +134,7 @@ try {
             $path=(Resolve-Path -LiteralPath (Field $p 'worktreePath')).Path
             Require ($path -ne $script:repo) 'Cannot remove main.'
             Clean $path
-            Require ((Field $p 'completed') -eq 'true' -and (Field $p 'evidenceRetained') -eq 'true') 'Completion/evidence missing.'
+            throw 'Worktree completion and retained evidence are not demonstrable by this tool.'
             $sha=Field $p 'head'; ExactSha $sha
             Require ((Native 'git' @('rev-parse','HEAD') $path).text -ceq $sha) 'Worktree HEAD drift.'
             Require ((Git @('merge-base','--is-ancestor',$sha,$mainSha)).code -eq 0) 'Unique commit must be retained.'
@@ -174,7 +158,7 @@ try {
             if ($r.code -eq 0) {
                 Require ($r.text -ceq $sha) 'Branch ref drift.'
                 Require ((Git @('merge-base','--is-ancestor',$sha,$mainSha)).code -eq 0) 'Unique commit must be retained.'
-                Require ((Field $p 'evidenceRetained') -eq 'true') 'Evidence missing.'
+                throw 'Retained branch evidence is not demonstrable by this tool.'
                 $used=GitValue @('worktree','list','--porcelain')
                 Require (-not $used.Contains("branch $branch")) 'Branch checked out.'
                 $r=Git @('branch','-d',($branch -replace '^refs/heads/',''))
@@ -195,7 +179,7 @@ try {
         'close' {
             Require ($gate -eq 'G5') 'Closure requires G5.'
             Require ($target -ceq (Field $p 'batch')) 'Batch target mismatch.'
-            Require ((Field $p 'greenEvidence') -eq 'true' -and (Field $p 'retentionComplete') -eq 'true' -and (Field $p 'objectsSettled') -eq 'true') 'Closure evidence incomplete.'
+            throw 'GREEN review, retention, and object dispositions are not demonstrable by this tool.'
             $metrics=$p.metrics
             foreach($key in @('peakWorkers','peakWorktrees','newBranches','mechanicalWorkers','verificationCases','manualCoordination','elapsedSeconds','provenance','bootstrapComparison')) { [void](Field $metrics $key) }
             $result.metrics=$metrics
