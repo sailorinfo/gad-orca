@@ -42,7 +42,36 @@ function Orca([string[]]$argv) {
 function Snapshot {
     $head = GitValue @('rev-parse','HEAD')
     $status = GitValue @('status','--porcelain=v1','--untracked-files=all')
-    return [ordered]@{ head=$head; status=$status }
+    $worktrees = GitValue @('worktree','list','--porcelain')
+    return [ordered]@{ head=$head; status=$status; worktrees=$worktrees }
+}
+function Evidence($p) {
+    $items=@($p.evidence)
+    Require ($items.Count -gt 0) 'Retained evidence is required.'
+    $checked=@()
+    foreach ($item in $items) {
+        $commit=Field $item 'commit'; ExactSha $commit
+        $path=Field $item 'path'
+        Require ($path -cmatch '^[A-Za-z0-9_./-]+$' -and -not $path.Contains('..')) 'Unsafe evidence path.'
+        $blob=Field $item 'blob'; ExactSha $blob
+        Require ((Git @('merge-base','--is-ancestor',$commit,$script:mainSha)).code -eq 0) 'Evidence commit is not retained on main.'
+        Require ((GitValue @('rev-parse',"${commit}:$path")) -ceq $blob) 'Evidence blob drift.'
+        $checked+=@{commit=$commit;path=$path;blob=$blob}
+    }
+    return ,$checked
+}
+function ExactWorktree($p) {
+    $id=Field $p 'worktreeId'; Require ($id -cne 'active' -and $id.Contains('::')) 'Explicit worktree ID required.'
+    $path=Field $p 'worktreePath'
+    $w=(Orca @('worktree','show','--worktree',"id:$id")).result.worktree
+    Require ($null -ne $w -and $w.id -ceq $id -and $w.path -ceq $path -and $w.git.path -ceq $path) 'Orca worktree identity drift.'
+    Require ($w.workspaceStatus -ceq 'completed' -and @($w.childWorktreeIds).Count -eq 0) 'Worktree incomplete or has children.'
+    Require ($w.head -ceq (Field $p 'head') -and $w.git.head -ceq $w.head) 'Orca HEAD drift.'
+    return $w
+}
+function NoTerminals([string]$id) {
+    $list=(Orca @('terminal','list','--worktree',"id:$id")).result
+    Require ($null -ne $list -and $null -ne $list.terminals -and $list.truncated -eq $false -and @($list.hostScope.omittedHostIds).Count -eq 0 -and $list.totalCount -eq 0 -and @($list.terminals).Count -eq 0) 'Live or unknown dependent terminal.'
 }
 function WriteBlob([string]$blob, [string]$path) {
     $psi = New-Object Diagnostics.ProcessStartInfo
@@ -70,6 +99,7 @@ try {
     $main = Field $p 'mainRef'
     Require ($main -eq 'refs/heads/main') 'Only local main is an authority ref.'
     $mainSha = GitValue @('rev-parse','--verify',$main)
+    $script:mainSha=$mainSha
     $target = Field $p 'target'
     $result.before = Snapshot
     switch ($action) {
@@ -123,48 +153,63 @@ try {
         'terminal-close' {
             Require ($gate -eq 'G5') 'Cleanup requires G5.'
             $handle=Field $p 'handle'; Require ($target -ceq $handle) 'Handle mismatch.'
-            throw 'Terminal completion, exact Orca ownership, and retained output are not demonstrable by this tool.'
+            $w=ExactWorktree $p
+            $t=(Orca @('terminal','show','--terminal',$handle)).result.terminal
+            Require ($null -ne $t -and $t.handle -ceq $handle -and $t.worktreeId -ceq $w.id -and $t.worktreePath -ceq $w.path -and $t.branch -ceq $w.branch) 'Terminal ownership drift.'
+            Require ($t.incarnationId -ceq (Field $p 'incarnationId') -and $t.ptyId -ceq (Field $p 'ptyId')) 'Terminal incarnation drift.'
+            Require ($t.connected -eq $false -and $t.writable -eq $false -and $t.orphaned -eq $false) 'Terminal process is live or unknown.'
+            $result.evidence=Evidence $p
+            $result.targetBefore=$t
             Orca @('terminal','close','--terminal',$handle) | Out-Null; $result.changed=$true
-            $r=Native 'orca' @('terminal','show','--terminal',$handle,'--json') $script:repo
-            Require ($r.code -ne 0 -or -not $r.text.Contains('"ok": true')) 'Terminal remains live.'
+            $list=(Orca @('terminal','list','--worktree',"id:$($w.id)")).result
+            Require ($list.truncated -eq $false -and @($list.hostScope.omittedHostIds).Count -eq 0 -and @($list.terminals | Where-Object { $_.handle -ceq $handle }).Count -eq 0) 'Terminal remains listed or listing incomplete.'
+            $result.targetAfter=@{handle=$handle;listed=$false}
         }
         'worktree-remove' {
             Require ($gate -eq 'G5') 'Cleanup requires G5.'
             $id=Field $p 'worktreeId'; Require ($target -ceq $id -and $id -ne 'active') 'Worktree mismatch.'
-            $path=(Resolve-Path -LiteralPath (Field $p 'worktreePath')).Path
-            Require ($path -ne $script:repo) 'Cannot remove main.'
+            $path=Field $p 'worktreePath'
+            Require ([IO.Path]::GetFullPath($path) -ne [IO.Path]::GetFullPath($script:repo)) 'Cannot remove main.'
+            $w=ExactWorktree $p
+            Require ($w.isMainWorktree -eq $false -and (Test-Path -LiteralPath $path -PathType Container)) 'Worktree absent or main.'
             Clean $path
-            throw 'Worktree completion and retained evidence are not demonstrable by this tool.'
             $sha=Field $p 'head'; ExactSha $sha
             Require ((Native 'git' @('rev-parse','HEAD') $path).text -ceq $sha) 'Worktree HEAD drift.'
             Require ((Git @('merge-base','--is-ancestor',$sha,$mainSha)).code -eq 0) 'Unique commit must be retained.'
-            $terms=Orca @('terminal','list','--worktree',"id:$id")
-            Require ($null -ne $terms.result -and $null -ne $terms.result.terminals -and -not $terms.result.truncated -and @($terms.result.terminals).Count -eq 0) 'Terminals or incomplete listing block removal.'
-            $listed=Orca @('worktree','show','--worktree',"id:$id")
-            Require (($listed | ConvertTo-Json -Depth 30).Contains($path)) 'Orca worktree identity drift.'
+            NoTerminals $id
             $branch=Field $p 'branch'; Require ($branch -cmatch '^refs/heads/[A-Za-z0-9_./-]+$') 'Unsafe branch.'
+            Require ($w.branch -ceq $branch -and $w.git.branch -ceq $branch) 'Worktree branch drift.'
             Require ((GitValue @('rev-parse','--verify',$branch)) -ceq $sha) 'Branch ref drift.'
+            $result.evidence=Evidence $p
+            $result.targetBefore=@{worktree=$w;branch=$branch;ref=$sha}
             Orca @('worktree','rm','--worktree',"id:$id") | Out-Null; $result.changed=$true
             Require (-not (Test-Path -LiteralPath $path)) 'Worktree still present.'
+            Require (-not (GitValue @('worktree','list','--porcelain')).Contains("worktree $path")) 'Git worktree still listed.'
             $ref=Git @('show-ref','--verify','--hash',$branch)
+            Require ($ref.code -ne 0 -or $ref.text -ceq $sha) 'Branch ref changed during removal.'
             $result.branchDisposition=if ($ref.code -eq 0) { "retained:$($ref.text)" } else { 'removed' }
+            $result.targetAfter=@{worktreePresent=$false;branchDisposition=$result.branchDisposition}
         }
         'branch-delete' {
             Require ($gate -eq 'G5') 'Cleanup requires G5.'
             $branch=Field $p 'branch'; Require ($branch -cmatch '^refs/heads/[A-Za-z0-9_./-]+$' -and $branch -ne $main) 'Unsafe branch.'
             Require ($target -ceq $branch) 'Branch mismatch.'
             $sha=Field $p 'head'; ExactSha $sha
+            Clean $script:repo
             $r=Git @('show-ref','--verify','--hash',$branch)
+            Require ($r.code -eq 0) 'Branch absent; reconcile before retry.'
             if ($r.code -eq 0) {
                 Require ($r.text -ceq $sha) 'Branch ref drift.'
                 Require ((Git @('merge-base','--is-ancestor',$sha,$mainSha)).code -eq 0) 'Unique commit must be retained.'
-                throw 'Retained branch evidence is not demonstrable by this tool.'
+                $result.evidence=Evidence $p
                 $used=GitValue @('worktree','list','--porcelain')
-                Require (-not $used.Contains("branch $branch")) 'Branch checked out.'
+                Require (-not (($used -split "`n") -ccontains "branch $branch")) 'Branch checked out.'
+                $result.targetBefore=@{branch=$branch;ref=$sha;worktrees=$used}
                 $r=Git @('branch','-d',($branch -replace '^refs/heads/',''))
                 Require ($r.code -eq 0) "Branch delete refused: $($r.text)"; $result.changed=$true
             }
             Require ((Git @('show-ref','--verify',$branch)).code -ne 0) 'Branch still present.'
+            $result.targetAfter=@{branch=$branch;present=$false}
         }
         'remote-check' {
             $remote=Field $p 'remote'; $ref=Field $p 'remoteRef'; $sha=Field $p 'expectedSha'; ExactSha $sha
@@ -179,10 +224,25 @@ try {
         'close' {
             Require ($gate -eq 'G5') 'Closure requires G5.'
             Require ($target -ceq (Field $p 'batch')) 'Batch target mismatch.'
-            throw 'GREEN review, retention, and object dispositions are not demonstrable by this tool.'
+            Require ((Field $p 'reviewVerdict') -ceq 'GREEN') 'GREEN review required.'
+            $result.evidence=Evidence $p
             $metrics=$p.metrics
             foreach($key in @('peakWorkers','peakWorktrees','newBranches','mechanicalWorkers','verificationCases','manualCoordination','elapsedSeconds','provenance','bootstrapComparison')) { [void](Field $metrics $key) }
+            foreach($key in @('peakWorkers','peakWorktrees','newBranches','mechanicalWorkers','verificationCases','manualCoordination','elapsedSeconds')) { Require ((Field $metrics $key) -cmatch '^(0|[1-9][0-9]*)$') "Invalid metric $key." }
+            $objects=@($p.objects)
+            Require ($objects.Count -gt 0) 'Reconciled objects required.'
+            foreach($o in $objects) {
+                $kind=Field $o 'kind'; $name=Field $o 'name'; $disposition=Field $o 'disposition'
+                Require ($disposition -ceq 'retained' -or $disposition -ceq 'removed') 'Unknown object disposition.'
+                if ($kind -ceq 'branch') { Require ($name -cmatch '^refs/heads/[A-Za-z0-9_./-]+$') 'Unsafe closure branch.'; $exists=(Git @('show-ref','--verify',$name)).code -eq 0 }
+                elseif ($kind -ceq 'worktree') { $list=GitValue @('worktree','list','--porcelain'); $exists=($list -split "`n") -ccontains "worktree $name" }
+                else { throw 'Unknown closure object kind.' }
+                Require ($exists -eq ($disposition -ceq 'retained')) 'Closure object drift.'
+            }
             $result.metrics=$metrics
+            $result.objects=$objects
+            $result.targetBefore=@{batch=$target;objects=$objects;reviewVerdict='GREEN'}
+            $result.targetAfter=$result.targetBefore
             # Closure is a checked result; a governed status writer records CLOSED.
         }
     }
