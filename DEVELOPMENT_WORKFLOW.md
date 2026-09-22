@@ -1,0 +1,25 @@
+# DEVELOPMENT WORKFLOW — gad-orca
+
+## 1. Recover, reflect, decide
+
+On start or resume, GAD Lead runs `RECONCILE → REFLECT → DECIDE`: locate mainline; read approved baselines and `PROJECT_STATUS.md`; inspect Git refs, commits and cleanliness, Orca Worktree/Terminal lineage, Worker commits, independent-review evidence, and relevant A2 material. Record conflicting facts and stop actions that depend on them. Use the latest governed state and explicit approvals, not chat memory, to choose the next legal action. In a permitted mode, Lead carries out authorized coordination and continues through `DISPATCH → MONITOR → VERIFY → REVIEW → PACKAGE → CLOSE`; it stops at a Human Gate, genuine blocker, or mode boundary.
+
+## 2. Prepare each bounded Batch
+
+Readiness defines a value slice, scope, do-not-touch boundaries, acceptance and verification criteria, architecture fit, capability allocation, and execution-baseline draft. Research is conditional. Governance finalizes that Batch's C/R/P classification and Gate route from actual impact and risk. An approved G1 vision or G2 project baseline does not establish a Batch or authorize implementation. Before implementation, every Batch must have an exact execution baseline: valid G3 for P2/P3 and any gated P1, or a governance-confirmed lightweight baseline for eligible P0/P1. Do not move directly from readiness to implementation.
+
+## 3. Dispatch and supervise Workers
+
+Before creating or resuming a Worker, Lead records a Worktree Decision with task, role, Agent preference and resolution, worktree action, reason, Orca parent, exact Git base, allowed/forbidden files and commands, expected output, completion condition, escalation path, review requirement, and cleanup condition. Orca parent identifies coordination lineage; Git base identifies the code/baseline snapshot. Lead uses Orca's native Worktree/Terminal/Agent capabilities, sends the bounded Worker contract, then waits, monitors, checks the reported final commit and diff, verifies required evidence, and decides the next action. Human users do not manually create ordinary Worker Worktrees, forward prompts, or relay Worker messages.
+
+Each Worker contract names authoritative artifacts, exact base, scope, file and command boundaries, verification, no-merge/no-push rules where applicable, and `WORKER_DONE`/`WORKER_BLOCKED` return fields. A Worker completion is a claim to verify, not acceptance. A blocker reports the minimal missing fact, evidence, baseline impact, and whether a user decision is needed; the Worker reports only to Lead.
+
+## 4. Review, Rework, and controlled change
+
+Implementation and Independent Review use separate Worktree/Session and a precise review commit, even when both use Codex. Lead evidence checking does not replace independent review. A Review Fail within the approved baseline returns to the original implementer for bounded Rework, then a new independent review. If scope, architecture, public contract, risk, or a controlled baseline materially changes, pause the affected work, classify the deviation, prepare the exact G4 package when required, obtain explicit user approval, promote through the artifact owner, and re-evaluate readiness. Repeated patching without reflection is forbidden.
+
+## 5. Human Gates, acceptance, and close
+
+For G1–G5, Lead presents the exact decision object, evidence, alternatives, counter-evidence or unknowns, reflection verdict, recommendation, authorized and excluded actions, rollback, and required approval text. Only the user's explicit scoped approval permits the corresponding gated action. G1 establishes project definition; G2 establishes the project baseline; G3 establishes a bounded execution baseline where required; G4 controls deviations and artifact mutations; G5 authorizes acceptance/integration where required. These approvals are distinct and do not substitute for each other.
+
+After required verification and independent review, seek G5 for P2/P3 or any Batch whose rules require it. Where G5 is not required, Governance may record `ACCEPTED` only after all required evidence is complete and no blocker remains. Authorized Integration is followed by stability verification and mechanical status synchronization before `GREEN`; retain required result and review evidence, settle artifacts and Worktree/process cleanup, then record `CLOSED`. A2 documents, installed scripts, tool success messages, and historical tests are not evidence that gad-orca's v0.1 E2E or third-party Release criteria have passed.
