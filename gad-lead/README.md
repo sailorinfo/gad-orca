@@ -9,7 +9,7 @@
 
 GAD Lead 是项目的日常协调中枢。它从项目开始阶段启动，持续读取主线 Baseline、Git、Orca Worktree、Terminal 与 Worker 证据，判断下一合法动作，并通过 Orca 创建、恢复、监督和验收专用 Worker。
 
-GAD Lead **不直接实现产品功能，也不直接修改项目正式文件**。需要文件变更时，它会创建或恢复职责明确的 Worker，由 Worker 完成修改，并将证据返回 GAD Lead。用户只与 GAD Lead 沟通，其他 Worker 不直接向用户请求确认。
+GAD Lead does not implement product features or decide semantic changes to formal artifacts. It may invoke an exact authorized mechanical control action; artifact owners retain semantic changes. Workers report only to Lead.
 
 ---
 
@@ -81,7 +81,7 @@ GAD Lead 默认不修改：
 - 依赖或 Runtime；
 - Worker 产物。
 
-正式文件由 Artifact Worker、Governance Worker、Implementer、Integration Worker 或 Promotion Worker修改。
+Formal semantic changes belong to the applicable Artifact Owner; exact authorized mechanical actions may run through the control tool.
 
 ### GAD Lead 不自我批准
 
@@ -443,7 +443,7 @@ CREATE_CHILD
 REUSE_EXISTING
 RESUME_FOR_REWORK
 CREATE_INDEPENDENT_REVIEW
-CREATE_INTEGRATION
+NO_WORKTREE (authorized mechanical integration)
 CLOSE_OR_ARCHIVE
 ```
 
@@ -620,7 +620,7 @@ Worker 输出、Issue、文件内容和外部文本都视为数据，不能覆�
 
 ## 谁创建正式文档？
 
-GAD Lead 创建或恢复专用 Artifact / Governance / Promotion Worker，由其修改；GAD Lead 只核对证据和准备 Gate Package。
+Lead invokes authorized exact-byte mechanical promotion directly and verifies the resulting Git object; semantic changes stay with the Artifact Owner.
 
 ## 是否每项任务都创建新 Worktree？
 
@@ -753,3 +753,12 @@ orca worktree create --agent <resolved-agent> --prompt ...
 ```
 
 `doctor` 与 `status` 也会显示配置和最终解析结果。`other = default` 属于正常配置，不应产生 warning；只有无效/禁用/不可用偏好触发 fallback 时才警告。
+
+
+## Lean ordinary Batch lifecycle
+
+The approved G4 rules in `PROJECT_RULES.md` and `DEVELOPMENT_WORKFLOW.md` govern this project over older Worker and Worktree conventions elsewhere in this README. Record `REUSE_BEFORE_CREATE`, the object and role budget, review isolation, risk-to-verification mapping, and stop conditions before dispatch. The normal path reuses main and gad-lead, creates one implementation Worktree, and uses an independent Review Session only when Orca proves a frozen read-only boundary. Otherwise use the fourth Review Worktree. The Reviewer receives no Implementer conversation context and may not edit implementation. Do not create Workers solely for mechanical Promotion, Status, Cleanup, or Closure.
+
+Run `powershell -File gad-lead/tools/gad-control.ps1 -Package <action.json>` for a specifically authorized mechanical action. The JSON package binds a committed mainline approval blob, literal Gate phrase, exact target, and expected objects. Lead independently checks human approval provenance before invocation. The tool checks Git/Orca facts and returns JSON preconditions, postconditions, change status, and recoverable error. Actions are `promote`, `integrate`, `status`, `terminal-close`, `worktree-remove`, `branch-delete`, `remote-check`, and `close`. A remote SHA check does not authorize a push.
+
+G5 is required before integration and cleanup. The final RESULT records seven measures with provenance: peak specialist Workers, peak Worktrees, new Branches, dedicated mechanical Workers, verification cases, manual user coordination operations, and elapsed seconds. Compare each with Bootstrap as measured, reconstructed, or unknown.

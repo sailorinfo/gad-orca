@@ -10,7 +10,8 @@
   },
   "tools": {
     "lead": "tools/gad-lead.ps1",
-    "project": "tools/gad-project.ps1"
+    "project": "tools/gad-project.ps1",
+    "control": "tools/gad-control.ps1"
   },
   "required_skills": [
     "gad-governance",

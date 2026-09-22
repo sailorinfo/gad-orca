@@ -64,9 +64,6 @@ Workers own bounded execution roles such as:
 - Implementation Readiness;
 - Implementation;
 - Independent Review;
-- Integration;
-- Mainline Promotion;
-- Cleanup.
 
 Workers report only to GAD Lead.
 
@@ -78,14 +75,15 @@ GAD Lead MUST NOT:
 
 - modify product code;
 - modify Project, Architecture or Batch Baselines;
-- modify `PROJECT_STATUS.md`;
+- semantically modify `PROJECT_STATUS.md`;
 - create or edit formal artifacts;
 - install project dependencies;
 - repair Worker code;
 - act as Implementer;
 - act as Independent Reviewer;
 - approve any Human Gate;
-- merge, push, delete Worktrees or erase evidence without an exact approved action package;
+- invoke integration or cleanup without a reconciled, exact approved action package;
+- push or delete remote refs without separate explicit scope;
 - modify GAD Skills;
 - treat a proposal, clarification or recap as approval;
 - create Workers without a Worktree Decision.
@@ -248,7 +246,7 @@ Role mapping:
 - `lead`: new GAD Lead sessions;
 - `implementation`: Implementer, Rework, Fix and equivalent code-changing implementation owners;
 - `review`: Independent Reviewer and Re-review;
-- `other`: Governance, Inception, Architecture, Research, Adoption, Integration, Promotion, Cleanup, Challenge and future roles not listed above.
+- `other`: Governance, Inception, Architecture, Research, Adoption, Challenge and future specialist roles not listed above.
 
 Resolution precedence:
 
@@ -375,7 +373,7 @@ Merely identifying the next legal action is not a stop condition.
 
 ### CLOSE
 
-After approval, use dedicated Integration/Promotion/Cleanup Workers and retain evidence.
+After approval, execute authorized deterministic mechanical actions directly and retain evidence. Use an artifact owner for semantic changes.
 
 ---
 
@@ -516,11 +514,7 @@ Use for the original Implementer correcting implementation under the same approv
 
 ### `CREATE_INDEPENDENT_REVIEW`
 
-Use a wholly separate Worktree from the exact commit under review.
-
-### `CREATE_INTEGRATION`
-
-Use for combining approved commits and integration verification.
+Default to an independent Session at the frozen exact commit only when Orca proves a read-only, isolated boundary and no Implementer context. Otherwise create the fourth Worktree from that commit. Record Reviewer Session identity, reviewed SHA, baseline identity, and clean HEAD before and after. Rework requires a fresh SHA and review.
 
 ### `CLOSE_OR_ARCHIVE`
 
@@ -648,7 +642,7 @@ REVIEW_FAIL
 → BLOCK
 → G4 Proposal Worker
 → user G4
-→ Baseline Promotion Worker
+? exact-byte promotion through an authorized control action
 → bounded Rework
 → new independent review
 ```
@@ -714,16 +708,7 @@ Persist a Reflection Record only for:
 
 ## 16. Mainline and Promotion
 
-GAD Lead does not perform file changes or merge itself.
-
-After G5, an exact approved action package may authorize:
-
-- Integration Worker;
-- Mainline Promotion Worker;
-- mechanical status synchronization Worker;
-- Cleanup Worker.
-
-The package must identify exact commits, files, verification and cleanup conditions.
+GAD Lead may invoke deterministic mechanical actions under an exact Gate or action package. It still cannot author semantic changes or approve a Gate. No dedicated Integration, Promotion, Status or Cleanup Worker is created merely to execute a mechanical consequence. The package binds the approved target, Git objects, ownership, evidence, preconditions and postconditions. `tools/gad-control.ps1` requires an approval blob committed on main and an exact target in the approval text; Lead must independently reconcile the human approval before invoking it. Tool success alone is not authorization or acceptance.
 
 ---
 
@@ -742,7 +727,7 @@ git push
 orca worktree rm
 ```
 
-unless a specific approved action package assigns a dedicated Worker and precisely authorizes the action.
+unless a specific approved action package precisely authorizes the deterministic local action. Remote push/deletion and broad reset/clean are outside the Lean control path.
 
 GAD Lead must not close or delete unknown Terminals or Worktrees.
 
@@ -837,3 +822,14 @@ It must end with:
 ```text
 No files, Worktrees, Terminals or project state were changed.
 ```
+
+
+## 19. Lean ordinary Batch path (G4 / LEAN-01)
+
+Before dispatch record `REUSE_BEFORE_CREATE`, existing Git/Orca objects, expected Worker/Branch counts, review isolation, risk-to-verification mapping and stop conditions. Default topology is main + gad-lead + implementation; use a fourth Review Worktree when Orca cannot prove independent read-only Session isolation. Stop before a fifth Worktree or material baseline deviation. Reuse the original Implementer for Rework.
+
+The control tool accepts one JSON package: `repo`, `action`, `gate`, `mainRef`, `approvalCommit`, `approvalPath`, `approvalBlob`, `approvalPhrase`, `target`, plus action-specific exact objects. The approval must be a committed mainline blob containing the literal Gate and target; Lead confirms its provenance and scope independently. Each invocation emits JSON `before`, `after`, `changed`, `ok`, and `error`. A failed or partial action is reconciled from Git/Orca facts before retry. A retry at the intended postcondition is idempotent where the object still exists; absent/ambiguous objects require reconciliation. The tool never supplies a Human Gate.
+
+`promote` and `status` copy exact Git blob bytes into a clean checkout with expected target blob. `integrate` requires G5, PASS evidence, clean main, a reviewed SHA and fast-forward. `terminal-close`, `worktree-remove`, and `branch-delete` require completed ownership and retained evidence; unknown, dirty, live, or unique objects remain. `remote-check` reads the remote SHA without pushing. `close` validates GREEN, retention, settled objects and seven RESULT metrics; Governance records the authorized CLOSED transition. Semantic status changes and decisions remain with the owning skill.
+
+Stop verification once the baseline's mapped cases and independent Review pass with no blocking new risk. RESULT reports peak specialist Workers, peak total Worktrees, new Branches, dedicated mechanical Workers, verification cases, user manual coordination operations, and elapsed seconds, with source snapshots and a measured/reconstructed/unknown Bootstrap comparison.
