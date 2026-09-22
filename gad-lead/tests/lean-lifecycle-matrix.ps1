@@ -29,22 +29,53 @@ try {
     $approval=G @('rev-parse','HEAD'); $proof=G @('rev-parse','HEAD:approval.txt')
     $p=[ordered]@{repo=$repo;action='promote';gate='G3';mainRef='refs/heads/main';approvalCommit=$approval;approvalPath='approval.txt';approvalBlob=$proof;approvalPhrase=$phrase;target="target.txt@$blob";path='target.txt';blob=$blob;expectedBlob=$old}
     $q=[ordered]@{} + $p;$q.approvalPhrase='G3 wrong';$r=Run $q
-    Check (-not $r.ok -and (Get-Content (Join-Path $repo 'target.txt') -Raw) -eq 'old') 'V1 missing approval mutated target';$results.V1='PASS'
+    Check (-not $r.ok -and (Get-Content (Join-Path $repo 'target.txt') -Raw) -eq 'old') 'V1 wrong approval phrase mutated target';$results.V1='PASS (wrong approval phrase; bytes unchanged)'
+    $q=[ordered]@{} + $p;$q.blob=$old;$r=Run $q
+    Check (-not $r.ok -and (G @('rev-parse','HEAD')) -eq $approval) 'V2 wrong blob was accepted'
     $r=Run $p;Check ($r.ok -and (G @('hash-object','target.txt')) -eq $blob) ("V2 promotion failed: " + ($r | ConvertTo-Json -Compress))
-    $r2=Run $p;Check ($r2.ok -and -not $r2.changed) 'V2 retry duplicated action';$results.V2='PASS'
-    $q=[ordered]@{} + $p;$q.action='worktree-remove';$q.gate='G5';$q.target='unknown';$q.worktreeId='unknown';$q.worktreePath=$repo;$q.head=$approval;$q.completed='true';$q.evidenceRetained='true';$r=Run $q
-    Check (-not $r.ok -and (Test-Path $repo)) 'V3 unknown worktree removed';$results.V3='PASS'
-    $q=[ordered]@{} + $p;$q.action='branch-delete';$q.gate='G5';$q.branch='refs/heads/unique';$q.target=$q.branch;$q.head=$approval;$q.evidenceRetained='true'
-    G @('branch','unique') | Out-Null;$r=Run $q;Check (-not $r.ok -and (G @('rev-parse','unique')) -eq $approval) 'V4 branch guard failed';$results.V4='PASS (authority refusal preserves ref)'
-    $q=[ordered]@{} + $p;$q.action='terminal-close';$q.gate='G5';$q.target='lead';$q.handle='lead';$q.role='lead';$q.completed='true';$q.evidenceRetained='true';$r=Run $q
-    Check (-not $r.ok) 'V5 lead terminal guard failed';$results.V5='PASS'
+    $r2=Run $p;Check ($r2.ok -and -not $r2.changed) 'V2 promotion retry duplicated action'
+    G @('add','target.txt') | Out-Null;G @('commit','-m','promoted target') | Out-Null
+    $ffBase=G @('rev-parse','HEAD')
+    G @('switch','-c','reviewed') | Out-Null
+    'reviewed' | Set-Content (Join-Path $repo 'review.txt') -NoNewline
+    G @('add','review.txt') | Out-Null;G @('commit','-m','reviewed change') | Out-Null
+    $reviewed=G @('rev-parse','HEAD')
+    G @('switch','main') | Out-Null
+    G @('switch','-c','gate-ff') | Out-Null
+    "G5 $reviewed" | Set-Content (Join-Path $repo 'approval.txt') -NoNewline
+    G @('add','approval.txt') | Out-Null;G @('commit','-m','fixture gate package') | Out-Null
+    $gateCommit=G @('rev-parse','HEAD');$gateBlob=G @('rev-parse','HEAD:approval.txt')
+    G @('switch','main') | Out-Null
+    $ip=[ordered]@{} + $p;$ip.action='integrate';$ip.gate='G5';$ip.target=$reviewed;$ip.approvalCommit=$gateCommit;$ip.approvalBlob=$gateBlob;$ip.approvalPhrase="G5 $reviewed";$ip.reviewedSha=$reviewed;$ip.expectedHead=$ffBase;$ip.reviewEvidenceSha=$reviewed;$ip.verification='PASS'
+    $r=Run $ip;Check ($r.ok -and $r.changed -and (G @('rev-parse','HEAD')) -eq $reviewed) 'V2 exact fast-forward failed'
+    G @('switch','-c','diverged',$ffBase) | Out-Null
+    'diverged' | Set-Content (Join-Path $repo 'diverged.txt') -NoNewline
+    G @('add','diverged.txt') | Out-Null;G @('commit','-m','diverged change') | Out-Null
+    $diverged=G @('rev-parse','HEAD')
+    G @('switch','main') | Out-Null
+    G @('switch','-c','gate-diverged') | Out-Null
+    "G5 $diverged" | Set-Content (Join-Path $repo 'approval.txt') -NoNewline
+    G @('add','approval.txt') | Out-Null;G @('commit','-m','fixture diverged package') | Out-Null
+    $ip.target=$diverged;$ip.reviewedSha=$diverged;$ip.reviewEvidenceSha=$diverged;$ip.approvalCommit=G @('rev-parse','HEAD');$ip.approvalBlob=G @('rev-parse','HEAD:approval.txt');$ip.approvalPhrase="G5 $diverged";$ip.expectedHead=$reviewed
+    G @('switch','main') | Out-Null
+    $r=Run $ip;Check (-not $r.ok -and $r.error -match 'Non-fast-forward' -and (G @('rev-parse','HEAD')) -eq $reviewed) 'V2 non-fast-forward was accepted or moved HEAD'
+    $results.V2='PASS (wrong blob refused; promotion and exact fast-forward succeeded; divergent target refused)'
+    'G5 unknown refs/heads/unique lead' | Set-Content (Join-Path $repo 'approval.txt') -NoNewline
+    G @('add','approval.txt') | Out-Null;G @('commit','-m','fixture cleanup package') | Out-Null
+    $cleanupApproval=G @('rev-parse','HEAD');$cleanupBlob=G @('rev-parse','HEAD:approval.txt')
+    $q=[ordered]@{} + $p;$q.action='worktree-remove';$q.gate='G5';$q.target='unknown';$q.worktreeId='unknown';$q.worktreePath=$repo;$q.head=$approval;$q.completed='true';$q.evidenceRetained='true';$q.approvalCommit=$cleanupApproval;$q.approvalBlob=$cleanupBlob;$q.approvalPhrase='G5 unknown';$r=Run $q
+    Check (-not $r.ok -and $r.error -match 'Cannot remove main' -and (Test-Path $repo)) 'V3 main worktree guard failed';$results.V3='PASS (main Worktree removal refused; dirty/live Orca guards pending)'
+    $q=[ordered]@{} + $p;$q.action='branch-delete';$q.gate='G5';$q.branch='refs/heads/unique';$q.target=$q.branch;$q.head=$approval;$q.evidenceRetained='true';$q.approvalCommit=$cleanupApproval;$q.approvalBlob=$cleanupBlob;$q.approvalPhrase='G5'
+    G @('branch','unique') | Out-Null;$r=Run $q;Check (-not $r.ok -and $r.error -match 'Branch ref drift' -and (G @('rev-parse','unique')) -eq $cleanupApproval) 'V4 branch SHA guard failed';$results.V4='PASS (branch SHA drift refused; Orca removal pending)'
+    $q=[ordered]@{} + $p;$q.action='terminal-close';$q.gate='G5';$q.target='lead';$q.handle='lead';$q.role='lead';$q.completed='true';$q.evidenceRetained='true';$q.approvalCommit=$cleanupApproval;$q.approvalBlob=$cleanupBlob;$q.approvalPhrase='G5';$r=Run $q
+    Check (-not $r.ok -and $r.error -match 'Owner/completion/evidence') 'V5 Lead role guard failed';$results.V5='PASS (Lead role refused; completed/unknown Orca terminal paths pending)'
     $frozen=G @('rev-parse','HEAD');$review=Join-Path $root 'review';G @('worktree','add','--detach',$review,$frozen) | Out-Null
     Check ((& git -C $review rev-parse HEAD).Trim() -eq $frozen -and -not ((& git -C $review status --porcelain) -join '')) 'V6 frozen checkout invalid'
     $results.V6='PASS (frozen Git checkout; Session isolation requires Orca Review evidence)'
-    $r=Run $p;Check ($r.ok -and -not $r.changed -and (G @('rev-parse','HEAD')) -eq $frozen) 'V7 retry changed state';$results.V7='PASS'
+    $r=Run $p;Check ($r.ok -and -not $r.changed -and (G @('rev-parse','HEAD')) -eq $frozen) 'V7 retry changed state';$results.V7='PASS (promotion retry only; interrupted Orca lifecycle pending)'
     $metrics=[ordered]@{peakWorkers='2';peakWorktrees='4';newBranches='2';mechanicalWorkers='0';verificationCases='8';manualCoordination='0';elapsedSeconds='123';provenance='Git/Orca snapshots';bootstrapComparison='19 cases measured; others unknown'}
     foreach($key in @('peakWorkers','peakWorktrees','newBranches','mechanicalWorkers','verificationCases','manualCoordination','elapsedSeconds','provenance','bootstrapComparison')) { Check (-not [string]::IsNullOrWhiteSpace($metrics[$key])) "V8 missing $key" }
-    $results.V8='PASS (schema; real values supplied at closure)'
+    $results.V8='PASS (fixture field presence only; real metrics and Bootstrap comparison pending G5)'
     $results | ConvertTo-Json -Compress
 } finally {
     # The disposable fixture is known and located beneath the freshly created temp root.

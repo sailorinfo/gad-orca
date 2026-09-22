@@ -3,8 +3,8 @@ param([Parameter(Mandatory=$true)][string]$Package)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# Mechanical execution only. The Lead must independently reconcile the human
-# approval; this script additionally binds it to a committed, exact-byte proof.
+# Mechanical execution only. Caller-supplied approval bytes are an object
+# binding, not proof of a Human Gate. Lead reconciles the actual Gate first.
 function Native([string]$exe, [string[]]$argv, [string]$cwd) {
     Push-Location -LiteralPath $cwd
     try {
@@ -74,7 +74,12 @@ try {
     $main = Field $p 'mainRef'
     Require ($main -eq 'refs/heads/main') 'Only local main is an authority ref.'
     $mainSha = GitValue @('rev-parse','--verify',$main)
-    Require ((Git @('merge-base','--is-ancestor',$approvalCommit,$mainSha)).code -eq 0) 'Approval commit is not on main.'
+    Require ((GitValue @('cat-file','-t',$approvalCommit)) -eq 'commit') 'Approval object is not a commit.'
+    # Integration approval can be a committed side-branch package: requiring it
+    # on main would make a fast-forward to its named future SHA impossible.
+    if ($action -ne 'integrate') {
+        Require ((Git @('merge-base','--is-ancestor',$approvalCommit,$mainSha)).code -eq 0) 'Approval commit is not on main.'
+    }
     Require ((GitValue @('rev-parse',"${approvalCommit}:${approvalPath}")) -ceq $approvalBlob) 'Approval blob drift.'
     $approvalText = GitValue @('show',"${approvalCommit}:${approvalPath}")
     $approvalPhrase = Field $p 'approvalPhrase'
