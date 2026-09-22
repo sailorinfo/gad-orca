@@ -93,6 +93,9 @@ function Invoke-Native {
 
     $old = $null
     try {
+        # Windows PowerShell 5.1 otherwise promotes native stderr to a
+        # terminating NativeCommandError under the script's Stop preference.
+        $ErrorActionPreference = 'Continue'
         if ($WorkingDirectory) {
             $old = Get-Location
             Set-Location -LiteralPath $WorkingDirectory
@@ -310,6 +313,9 @@ function Assert-GitProject {
     if ($result.ExitCode -ne 0) {
         throw "Existing project is not a Git worktree: $Project"
     }
+    if (-not (Paths-Equal -A $Project -B $result.Text.Trim())) {
+        throw "Project path must be the Git worktree root: $Project"
+    }
 }
 
 function Test-GitHasHead {
@@ -323,6 +329,290 @@ function Test-GitHasHead {
         $result.ExitCode -eq 0 -and
         -not [string]::IsNullOrWhiteSpace($result.Text)
     )
+}
+
+function Invoke-Git {
+    param([string]$Project, [string[]]$Arguments, [string]$IndexFile)
+    $previous = $env:GIT_INDEX_FILE
+    try {
+        if ($IndexFile) { $env:GIT_INDEX_FILE = $IndexFile }
+        return Invoke-Native -File 'git' -Arguments (@('-C', $Project, '-c', 'core.quotePath=false') + $Arguments)
+    }
+    finally {
+        if ($null -eq $previous) { Remove-Item Env:GIT_INDEX_FILE -ErrorAction SilentlyContinue }
+        else { $env:GIT_INDEX_FILE = $previous }
+    }
+}
+
+function Assert-GitSuccess {
+    param($Result, [string]$Action)
+    if ($Result.ExitCode -ne 0) { throw "$Action failed: $($Result.Text)" }
+    return $Result.Text.Trim()
+}
+
+function Get-GitHead {
+    param([string]$Project)
+    $result = Invoke-Git -Project $Project -Arguments @('rev-parse', '--verify', 'HEAD')
+    if ($result.ExitCode -ne 0) { return $null }
+    return $result.Text.Trim()
+}
+
+function Get-InstallManifest {
+    param([string]$PackageDir, [string]$GadCore)
+    $roots = @([pscustomobject]@{ source=$PackageDir; target='gad-lead' })
+    foreach ($skill in $script:RequiredSkills) {
+        $roots += [pscustomobject]@{
+            source=(Join-Path $GadCore "skills\$skill")
+            target=".agents/skills/$skill"
+        }
+    }
+    $manifest = @()
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($root in $roots) {
+        if (-not (Test-Path -LiteralPath $root.source -PathType Container)) { throw "Source directory missing: $($root.source)" }
+        foreach ($item in Get-ChildItem -LiteralPath $root.source -Recurse -Force | Sort-Object FullName) {
+            if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Unsupported source link or reparse entry: $($item.FullName)"
+            }
+            if ($item.PSIsContainer) { continue }
+            $relative = $item.FullName.Substring($root.source.Length).TrimStart('\', '/').Replace('\', '/')
+            $parts = $relative.Split('/')
+            if (-not $relative -or @($parts | Where-Object { $_ -in @('', '.', '..') }).Count -gt 0) {
+                throw "Invalid source-relative path: $relative"
+            }
+            $target = "$($root.target)/$relative"
+            if (-not $seen.Add($target)) { throw "Case-insensitive destination collision: $target" }
+            $manifest += [pscustomobject]@{
+                path=$target
+                source=$item.FullName
+                sha256=(Get-FileHashValue -Path $item.FullName)
+            }
+        }
+    }
+    return @($manifest | Sort-Object path)
+}
+
+function Get-ManagedIndexEntries {
+    param([string]$Project)
+    $result = Invoke-Git -Project $Project -Arguments @('ls-files', '--stage', '--', 'gad-lead', '.agents/skills')
+    [void](Assert-GitSuccess -Result $result -Action 'Inspect index')
+    $entries = @()
+    foreach ($line in @($result.Text -split "`r?`n" | Where-Object { $_ })) {
+        if ($line -notmatch '^([0-7]{6}) ([0-9a-f]{40,64}) ([0-3])\t(.*)$') { throw 'Unable to parse a managed index entry.' }
+        $entries += [pscustomobject]@{ mode=$Matches[1]; oid=$Matches[2]; stage=[int]$Matches[3]; path=$Matches[4] }
+    }
+    return $entries
+}
+
+function Get-IndexFingerprint {
+    param([string]$Project)
+    $result = Invoke-Git -Project $Project -Arguments @('ls-files', '--stage', '--debug')
+    [void](Assert-GitSuccess -Result $result -Action 'Inspect primary index')
+    return $result.Text
+}
+
+function Assert-IndexPreserved {
+    param([string]$Project, [string]$Before)
+    if ((Get-IndexFingerprint -Project $Project) -cne $Before) { throw 'Primary index changed unexpectedly; stop and inspect before retry.' }
+}
+
+function Invoke-Init {
+    param($Options, [string]$Project, [string]$PackageDir, [string]$GadCore)
+    $state = [ordered]@{
+        ok=$false; command='init'; project=$Project; dryRun=[bool]$Options.DryRun
+        phase='validate'; headBefore=$null; headAfter=$null; installed=$false
+        committed=$false; rootCommitCreated=$false; commit=$null; reusedHead=$false
+        commitRequired=$false; leadLaunchAttempted=$false; leadStarted=$false
+        gadLeadStarted=$false; indexPreserved=$true; copied=@(); reused=@()
+        conflicting=@(); manifest=@(); plannedCommit=$false; neededCommit=$false; plannedLaunch=[bool]$Options.StartLead
+        nextAction=$null; error=$null
+    }
+    $indexBefore = $null
+    try {
+        $state.headBefore = Get-GitHead -Project $Project
+        $state.headAfter = $state.headBefore
+        $indexBefore = Get-IndexFingerprint -Project $Project
+        $manifest = @(Get-InstallManifest -PackageDir $PackageDir -GadCore $GadCore)
+        $state.manifest = @($manifest | ForEach-Object { [pscustomobject]@{ path=$_.path; sha256=$_.sha256 } })
+        $byPath = @{}
+        foreach ($entry in $manifest) { $byPath[$entry.path] = $entry }
+        if ((Get-Item -LiteralPath $PackageDir).Attributes -band [System.IO.FileAttributes]::ReparsePoint) { throw 'Package root is a link or reparse entry.' }
+        foreach ($skill in $script:RequiredSkills) {
+            $skillRoot = Join-Path $GadCore "skills\$skill"
+            if ((Get-Item -LiteralPath $skillRoot).Attributes -band [System.IO.FileAttributes]::ReparsePoint) { throw "Skill root is a link or reparse entry: $skill" }
+        }
+
+        # Validate every destination before copying any file. Root commits reject
+        # extras in the managed trees, including ignored and staged-only paths.
+        $managedRoots = @('gad-lead') + @($script:RequiredSkills | ForEach-Object { ".agents/skills/$_" })
+        foreach ($root in $managedRoots) {
+                $directory = Join-Path $Project ($root.Replace('/', '\'))
+                if (Test-Path -LiteralPath $directory) {
+                    foreach ($item in Get-ChildItem -LiteralPath $directory -Recurse -Force) {
+                        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Unsupported destination link or reparse entry: $($item.FullName)" }
+                        if ($item.PSIsContainer) { continue }
+                        $relative = $item.FullName.Substring($Project.TrimEnd('\', '/').Length).TrimStart('\', '/').Replace('\', '/')
+                        if (-not $state.headBefore -and -not $byPath.ContainsKey($relative)) { $state.conflicting += $relative }
+                    }
+                }
+        }
+        foreach ($entry in $manifest) {
+            $destination = Join-Path $Project ($entry.path.Replace('/', '\'))
+            if (Test-Path -LiteralPath $destination) {
+                if (-not (Test-Path -LiteralPath $destination -PathType Leaf) -or
+                    (Get-FileHashValue -Path $destination) -ne $entry.sha256) {
+                    $state.conflicting += $entry.path
+                }
+                else { $state.reused += $entry.path }
+            }
+        }
+        foreach ($indexed in @(Get-ManagedIndexEntries -Project $Project)) {
+            $managedIndexPath = $indexed.path -eq 'gad-lead' -or $indexed.path.StartsWith('gad-lead/')
+            foreach ($skill in $script:RequiredSkills) {
+                if ($indexed.path.StartsWith(".agents/skills/$skill/")) { $managedIndexPath = $true }
+            }
+            if (-not $managedIndexPath) { continue }
+            if ($indexed.stage -ne 0) { $state.conflicting += $indexed.path; continue }
+            if (-not $byPath.ContainsKey($indexed.path)) {
+                if (-not $state.headBefore) { $state.conflicting += $indexed.path }
+                continue
+            }
+            $blob = Invoke-Git -Project $Project -Arguments @('hash-object', '--', $byPath[$indexed.path].source)
+            $expectedOid = Assert-GitSuccess -Result $blob -Action 'Hash manifest file'
+            if ($indexed.oid -ne $expectedOid) { $state.conflicting += $indexed.path }
+        }
+        if ($state.conflicting.Count -gt 0) {
+            $state.conflicting = @($state.conflicting | Sort-Object -Unique)
+            throw 'Managed destination or staged entry conflicts with the install manifest.'
+        }
+
+        $needsCommit = [bool]($Options.Commit -or ($Options.StartLead -and -not $state.headBefore))
+        $state.plannedCommit = $needsCommit
+        $state.neededCommit = -not [bool]$state.headBefore
+        if ($state.headBefore) {
+            foreach ($entry in $manifest) {
+                $oid = Assert-GitSuccess -Result (Invoke-Git -Project $Project -Arguments @('hash-object', '--', $entry.source)) -Action 'Hash manifest file'
+                $headEntry = Invoke-Git -Project $Project -Arguments @('ls-tree', 'HEAD', '--', $entry.path)
+                if ($headEntry.ExitCode -ne 0 -or $headEntry.Text -notmatch ('^100644 blob ' + [regex]::Escape($oid) + "`t")) { $state.neededCommit = $true; break }
+            }
+        }
+        if ($Options.DryRun) {
+            $state.ok = $true
+            $state.nextAction = 'Run the same command without --dry-run to apply the plan.'
+            return [pscustomobject]$state
+        }
+
+        $state.phase = 'copy'
+        foreach ($entry in $manifest) {
+            $destination = Join-Path $Project ($entry.path.Replace('/', '\'))
+            if ((Get-FileHashValue -Path $entry.source) -ne $entry.sha256) { throw "Source changed during installation: $($entry.path)" }
+            if (Test-Path -LiteralPath $destination -PathType Leaf) { continue }
+            $parent = Split-Path -Parent $destination
+            if (-not (Test-Path -LiteralPath $parent -PathType Container)) { [void](New-Item -ItemType Directory -Force -Path $parent) }
+            $partial = Join-Path $parent ('.gad-project-copy-' + [guid]::NewGuid().ToString('N'))
+            try {
+                [System.IO.File]::Copy($entry.source, $partial)
+                if ((Get-FileHashValue -Path $partial) -ne $entry.sha256) { throw "Copied file hash mismatch: $($entry.path)" }
+                [System.IO.File]::Move($partial, $destination)
+            }
+            finally { Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue }
+            $state.copied += $entry.path
+        }
+        $state.installed = $true
+
+        if ($needsCommit) {
+            $state.phase = 'stage'
+            $temporary = Join-Path ([System.IO.Path]::GetTempPath()) ("gad-project-index-" + [guid]::NewGuid().ToString('N'))
+            try {
+                if ($state.headBefore) {
+                    [void](Assert-GitSuccess -Result (Invoke-Git -Project $Project -IndexFile $temporary -Arguments @('read-tree', 'HEAD')) -Action 'Read HEAD into isolated index')
+                }
+                else {
+                    [void](Assert-GitSuccess -Result (Invoke-Git -Project $Project -IndexFile $temporary -Arguments @('read-tree', '--empty')) -Action 'Initialize isolated index')
+                }
+                foreach ($entry in $manifest) {
+                    if ((Get-FileHashValue -Path $entry.source) -ne $entry.sha256) { throw "Source changed during staging: $($entry.path)" }
+                    $destination = Join-Path $Project ($entry.path.Replace('/', '\'))
+                    if ((Get-FileHashValue -Path $destination) -ne $entry.sha256) { throw "Destination changed during staging: $($entry.path)" }
+                    [void](Assert-GitSuccess -Result (Invoke-Git -Project $Project -IndexFile $temporary -Arguments @('add', '-f', '--', $entry.path)) -Action "Stage $($entry.path) in isolated index")
+                }
+                $tree = Assert-GitSuccess -Result (Invoke-Git -Project $Project -IndexFile $temporary -Arguments @('write-tree')) -Action 'Write isolated tree'
+                foreach ($entry in $manifest) {
+                    $oid = Assert-GitSuccess -Result (Invoke-Git -Project $Project -Arguments @('hash-object', '--', $entry.source)) -Action 'Hash manifest file'
+                    $treeEntry = Invoke-Git -Project $Project -Arguments @('ls-tree', $tree, '--', $entry.path)
+                    if ($treeEntry.ExitCode -ne 0 -or $treeEntry.Text -notmatch ('^100644 blob ' + [regex]::Escape($oid) + "`t")) {
+                        throw "Isolated tree differs from manifest: $($entry.path)"
+                    }
+                }
+                if (-not $state.headBefore) {
+                    $listing = Assert-GitSuccess -Result (Invoke-Git -Project $Project -Arguments @('ls-tree', '-r', $tree)) -Action 'Inspect root tree'
+                    $lines = @($listing -split "`r?`n" | Where-Object { $_ })
+                    if ($lines.Count -ne $manifest.Count) { throw 'Isolated root tree does not contain exactly the manifest.' }
+                    foreach ($line in $lines) {
+                        if ($line -notmatch '^100644 blob [0-9a-f]{40,64}\t(.*)$' -or -not $byPath.ContainsKey($Matches[1])) { throw 'Isolated root tree contains an unauthorized path or mode.' }
+                    }
+                }
+                $oldTree = if ($state.headBefore) { Assert-GitSuccess -Result (Invoke-Git -Project $Project -Arguments @('rev-parse', 'HEAD^{tree}')) -Action 'Read HEAD tree' } else { $null }
+                if ($tree -ne $oldTree) {
+                    $state.phase = 'commit'
+                    $commitArgs = @('commit-tree', $tree, '-m', 'chore: initialize project with GAD Lead')
+                    if ($state.headBefore) { $commitArgs += @('-p', $state.headBefore) }
+                    $newCommit = Assert-GitSuccess -Result (Invoke-Git -Project $Project -Arguments $commitArgs) -Action 'Create isolated commit'
+                    $oldRef = if ($state.headBefore) { $state.headBefore } else { '0' * 40 }
+                    [void](Assert-GitSuccess -Result (Invoke-Git -Project $Project -Arguments @('update-ref', 'HEAD', $newCommit, $oldRef)) -Action 'Advance HEAD')
+                    $state.headAfter = $newCommit
+                    $state.commit = $newCommit
+                    $state.committed = $true
+                    $state.rootCommitCreated = -not [bool]$state.headBefore
+                }
+                else { $state.reusedHead = $true }
+            }
+            finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
+        }
+        else { $state.reusedHead = [bool]$state.headBefore }
+
+        Assert-IndexPreserved -Project $Project -Before $indexBefore
+        if ($Options.StartLead) {
+            $state.phase = 'launch'
+            if (-not $state.headAfter) { throw 'Cannot launch GAD Lead without a Git HEAD.' }
+            if (-not $needsCommit) {
+                foreach ($entry in $manifest) {
+                    $show = Invoke-Git -Project $Project -Arguments @('ls-tree', '-r', 'HEAD', '--', $entry.path)
+                    $oid = Assert-GitSuccess -Result (Invoke-Git -Project $Project -Arguments @('hash-object', '--', $entry.source)) -Action 'Hash manifest file'
+                    if ($show.ExitCode -ne 0 -or $show.Text -notmatch ('^100644 blob ' + [regex]::Escape($oid) + "`t")) {
+                        $state.commitRequired = $true
+                        throw 'Existing HEAD does not contain the exact installed manifest; rerun with --commit.'
+                    }
+                }
+            }
+            $state.leadLaunchAttempted = $true
+            $launcher = Join-Path $Project 'gad-lead\gad-lead.cmd'
+            $lead = Invoke-Native -File $launcher -Arguments @('start', '--mode', $Options.Mode, '--project', $Project, '--activate') -WorkingDirectory $Project
+            [void](Assert-GitSuccess -Result $lead -Action 'GAD Lead start')
+            $state.leadStarted = $true
+            $state.gadLeadStarted = $true
+        }
+        $state.ok = $true
+        $state.nextAction = if (-not $state.headAfter) { 'Run init --commit or init --start-lead --mode bootstrap to create the root commit.' } else { 'Installation complete.' }
+    }
+    catch {
+        $state.error = $_.Exception.Message
+        $state.nextAction = if ($state.commitRequired) {
+            'Rerun init with --commit --start-lead --mode bootstrap.'
+        } elseif ($state.phase -eq 'commit' -and $state.error -match 'identity|ident name|auto-detect email|user\.name|user\.email') {
+            'Configure Git user.name and user.email for this repository, then retry the same command.'
+        } elseif ($state.phase -eq 'launch') {
+            'Repair the Orca or Agent launch prerequisite and retry; the completed commit is retained.'
+        } else {
+            'Repair the reported conflict or prerequisite and retry the same command.'
+        }
+        $state.headAfter = Get-GitHead -Project $Project
+        if ($null -ne $indexBefore) {
+            try { $state.indexPreserved = ((Get-IndexFingerprint -Project $Project) -ceq $indexBefore) }
+            catch { $state.indexPreserved = $false }
+        }
+    }
+    return [pscustomobject]$state
 }
 
 function Install-GadLead {
@@ -495,6 +785,14 @@ try {
         throw "Unknown command '$($options.Command)'. Run help."
     }
 
+    if ($options.Command -eq 'init') {
+        if ($options.StartLead -and $options.Mode -ne 'bootstrap') {
+            throw 'Only --mode bootstrap is approved for init --start-lead.'
+        }
+        $result = Invoke-Init -Options $options -Project $project -PackageDir $packageDir -GadCore $gadCore
+        Complete -Data $result -Json:$options.Json -Code $(if ($result.ok) { 0 } else { 1 })
+    }
+
     $operations = Install-GadLead `
         -Project $project `
         -PackageDir $packageDir `
@@ -582,10 +880,30 @@ catch {
     Write-Diagnostic $_.Exception.Message
 
     if ($args -contains '--json') {
+        $failureProject = $null
+        $failureHead = $null
+        if ($null -ne (Get-Variable options -ErrorAction SilentlyContinue) -and $options.Project) {
+            $failureProject = [System.IO.Path]::GetFullPath($options.Project)
+            if (Test-Path -LiteralPath $failureProject -PathType Container) {
+                try { $failureHead = Get-GitHead -Project $failureProject } catch { }
+            }
+        }
         Write-Output ([pscustomobject]@{
             ok = $false
             error = $_.Exception.Message
             version = $script:GadProjectVersion
+            phase = 'validate'
+            project = $failureProject
+            headBefore = $failureHead
+            headAfter = $failureHead
+            rootCommitCreated = $false
+            copied = @()
+            reused = @()
+            conflicting = @()
+            indexPreserved = $true
+            leadLaunchAttempted = $false
+            leadStarted = $false
+            nextAction = 'Correct the reported input or prerequisite and retry.'
         } | ConvertTo-Json -Compress)
     }
 
