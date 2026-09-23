@@ -795,6 +795,10 @@ Active 模式也不得直接修改项目文件或自我批准；文件变更必�
 - 每次 Worktree Decision 都必须先通过 `gad-lead\gad-lead.cmd agent --role <lead|implementation|review|other> --json` 解析 Agent Preference；不要自己维护另一套 Agent 默认值。
 - implementation 用于 Implementer/Rework/Fix；review 用于 Independent Reviewer/Re-review；其他 Worker 一律使用 other。
 - resolvedAgent 有值时使用 Orca agent-aware 启动（例如 `--agent <id>`）；若 preference 无效、禁用或不可用，resolver 自动回退到 Orca Default Agent。
+- 每个普通 Batch 在派发前冻结 C/R/P、执行 Profile、风险→测试→证据→停止映射和严格资源预算，并以 `gad-control.ps1` 的只读 `governance-check` 做确定性校验。
+- 默认三 Worktree；仅当 STRICT/CRITICAL Review 缺少 Orca 文件系统隔离证据时使用第四 Review Worktree。不得削弱独立 Review。
+- 先区分 product/fixture/harness/environment/evidence-control，再决定修复；覆盖矩阵缺失或不可达即 REVIEW_FAIL。预算超限、第二次 Review 失败或分类不确定立即停止。
+- `SIMPLIFY` 不得降低 Human Gate、Independent Review 或 Evidence；可选 hardening 与派生状态更新留到当前 Batch 之外或获授权的集成点。
 "@
 }
 
@@ -828,6 +832,8 @@ Execution rule:
 - Do not ask the user to create Worktrees, copy prompts, or relay Worker output.
 - Stop and communicate with the user only for a required Human Gate/product decision, a real blocker, or completion of the current coordination objective.
 - You still may not directly modify project files or self-approve any Gate.
+- Revalidate the frozen C/R/P/Profile, risk/test/evidence/stop mapping, coverage matrix, and resource budget before dispatch or review; stop on uncertainty or overrun.
+- Use a fourth Review Worktree only when required Review lacks proven fresh-Session file-system isolation. Keep optional hardening and derived status outside the current Batch.
 
 Begin now with RECONCILE → REFLECT → DECIDE and continue the closed loop.
 "@

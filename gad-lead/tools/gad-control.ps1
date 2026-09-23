@@ -29,6 +29,87 @@ function Field($obj, [string]$name) {
     Require ($null -ne $p -and -not [string]::IsNullOrWhiteSpace([string]$p.Value)) "Missing $name."
     return [string]$p.Value
 }
+function BoolField($obj, [string]$name) {
+    $p = $obj.PSObject.Properties[$name]
+    Require ($null -ne $p -and $p.Value -is [bool]) "Missing or invalid Boolean $name."
+    return [bool]$p.Value
+}
+function CountField($obj, [string]$name) {
+    $value=Field $obj $name
+    Require ($value -cmatch '^(0|[1-9][0-9]*)$') "Invalid count $name."
+    return [int]$value
+}
+function Items($obj, [string]$name) {
+    $p=$obj.PSObject.Properties[$name]
+    Require ($null -ne $p) "Missing $name."
+    return @($p.Value)
+}
+function NonEmptyUnique($obj, [string]$name) {
+    $values=Items $obj $name
+    Require ($values.Count -gt 0) "$name must not be empty."
+    foreach($value in $values) { Require (-not [string]::IsNullOrWhiteSpace([string]$value)) "Blank $name item." }
+    Require (@($values | Select-Object -Unique).Count -eq $values.Count) "Duplicate $name item."
+    return ,$values
+}
+function GovernanceCheck($p) {
+    $classification=$p.classification
+    $change=Field $classification 'changeClass'; Require ($change -in @('C0','C1','C2','C3','C4')) 'Invalid change class.'
+    $risk=Field $classification 'risk'; Require ($risk -in @('R0','R1','R2','R3','R4')) 'Invalid risk.'
+    $governanceProfile=Field $classification 'governanceProfile'; Require ($governanceProfile -in @('P0','P1','P2','P3')) 'Invalid governance profile.'
+    $profile=Field $classification 'profile'; Require ($profile -in @('QUICK','STANDARD','STRICT','CRITICAL')) 'Invalid profile.'
+    $strength=@{QUICK=0;STANDARD=1;STRICT=2;CRITICAL=3}
+    $minimum=@{P0='QUICK';P1='STANDARD';P2='STRICT';P3='CRITICAL'}[$governanceProfile]
+    if (($change -in @('C2','C3') -or $risk -eq 'R3' -or (BoolField $classification 'humanAuthorityRisk') -or (BoolField $classification 'evidenceIntegrityRisk') -or (BoolField $classification 'recoveryRisk')) -and $strength[$minimum] -lt 2) { $minimum='STRICT' }
+    elseif (($change -eq 'C1' -or $risk -eq 'R2') -and $strength[$minimum] -lt 1) { $minimum='STANDARD' }
+    if ($change -eq 'C4' -or $risk -eq 'R4' -or (BoolField $classification 'criticalControlFailure')) { $minimum='CRITICAL' }
+    if (BoolField $classification 'ambiguous') { $minimum=@{QUICK='STANDARD';STANDARD='STRICT';STRICT='CRITICAL';CRITICAL='CRITICAL'}[$minimum] }
+    Require ($strength[$profile] -ge $strength[$minimum]) "Profile below required minimum $minimum."
+    Require (-not (BoolField $classification 'automaticDowngrade')) 'Automatic Profile downgrade refused.'
+
+    $baseline=$p.baseline
+    Require (BoolField $baseline 'frozen') 'G3 baseline must be frozen.'
+    $risks=NonEmptyUnique $baseline 'risks'; $tests=NonEmptyUnique $baseline 'requiredTests'
+    [void](NonEmptyUnique $baseline 'requiredEvidence'); [void](NonEmptyUnique $baseline 'stopConditions')
+    $declared=Items $baseline 'declaredTests'
+    Require ($declared.Count -eq $tests.Count -and @($declared | Where-Object { $tests -cnotcontains $_ }).Count -eq 0) 'Unapproved required test or missing frozen test.'
+    Require (-not (BoolField $baseline 'addedRole') -and -not (BoolField $baseline 'addedCase')) 'Unapproved case or role refused.'
+    $budgets=$baseline.budgets
+    $fixed=[ordered]@{implementationWorkers=1;reviewerSessions=1;implementationWorktrees=1;mechanicalWorkers=0;reviewRounds=1;reworkRounds=1;dispatchRecords=4;newBranches=1;defaultTotalWorktrees=3;maximumTotalWorktrees=4}
+    foreach($key in $fixed.Keys) { Require ((CountField $budgets $key) -eq $fixed[$key]) "Frozen budget mismatch: $key." }
+
+    $verification=$p.verification
+    $minimums=@{QUICK=@('risk-check','trusted-smoke');STANDARD=@('risk-check','trusted-smoke','affected-integration');STRICT=@('risk-check','trusted-smoke','affected-integration','coverage','independent-review');CRITICAL=@('risk-check','trusted-smoke','affected-integration','coverage','independent-review','independent-gate-audit','failure-recovery')}
+    $kinds=Items $verification 'kinds'
+    foreach($kind in $minimums[$profile]) { Require ($kinds -ccontains $kind) "Missing $profile verification: $kind." }
+    $riskChecks=Items $verification 'riskChecks'
+    foreach($declaredRisk in $risks) { Require (@($riskChecks | Where-Object { (Field $_ 'risk') -ceq [string]$declaredRisk -and (Field $_ 'test') -in $tests }).Count -gt 0) "Risk lacks a frozen verification case: $declaredRisk." }
+    $smoke=$verification.trustedSmoke
+    Require ((BoolField $smoke 'cleanFixture') -and (BoolField $smoke 'repeatable') -and (CountField $smoke 'exitCode') -eq 0 -and (BoolField $smoke 'expectedAssertion') -and -not (BoolField $smoke 'skippedRequiredAssertion') -and (BoolField $smoke 'retainedInput') -and (BoolField $smoke 'retainedOutput') -and (BoolField $smoke 'retainedStatus')) 'Trusted smoke contract not satisfied.'
+
+    $failure=$p.failure
+    $failureClass=Field $failure 'classification'; Require ($failureClass -in @('product','fixture','harness','environment','evidence-control')) 'Invalid failure classification.'
+    Require (-not (BoolField $failure 'uncertain')) 'Failure classification uncertainty requires stop.'
+    if ($failureClass -in @('fixture','harness')) { Require (-not (BoolField $failure 'productFailure') -and -not (BoolField $failure 'expandTests') -and -not (BoolField $failure 'trustedPathReproduced')) 'Fixture/harness failure cannot become product failure or expand scope.' }
+
+    $coverage=Items $p 'coverage'
+    Require ($coverage.Count -gt 0) 'Coverage matrix is required.'
+    foreach($row in $coverage) { [void](Field $row 'requirement'); [void](Field $row 'implementation'); [void](Field $row 'evidence'); Require ((BoolField $row 'reachable') -and (Field $row 'verdict') -ceq 'PASS') 'Missing or unreachable implementation is REVIEW_FAIL.' }
+
+    $runtime=$p.runtime
+    Require ((CountField $runtime 'implementationWorkers') -le 1 -and (CountField $runtime 'reviewerSessions') -le 2 -and (CountField $runtime 'implementationWorktrees') -le 1 -and (CountField $runtime 'mechanicalWorkers') -eq 0 -and (CountField $runtime 'dispatchRecords') -le 4 -and (CountField $runtime 'reviewRounds') -le 2 -and (CountField $runtime 'reworkRounds') -le 1 -and (CountField $runtime 'newBranches') -le 1) 'LEAN-02 resource budget exceeded.'
+    Require ((CountField $runtime 'reviewFailures') -le 1) 'Second review failure stops the Batch.'
+    $reason=Field $runtime 'reReviewReason'; Require ($reason -in @('NONE','REVIEW_FAIL','APPROVED_MATERIAL_REWORK')) 'Re-review lacks an allowed trigger.'
+    if ((CountField $runtime 'reviewRounds') -gt 1) { Require ($reason -cne 'NONE' -and (CountField $runtime 'reviewerSessions') -eq 2) 'Re-review requires REVIEW_FAIL or approved material rework and a fresh Session.' }
+    $total=CountField $runtime 'totalWorktrees'; $isolation=BoolField $runtime 'isolationEvidence'; $fallback=BoolField $runtime 'reviewWorktreeFallback'
+    Require ($total -ge 2 -and $total -le 4) 'Worktree budget exceeded.'
+    if ($profile -in @('STRICT','CRITICAL') -and -not $isolation) { Require ($fallback -and $total -eq 4) 'Fourth Review Worktree required when isolation evidence is absent.' }
+    else { Require (-not $fallback -and $total -le 3) 'Fourth Review Worktree is conditional, not default.' }
+    Require (BoolField $runtime 'reviewIndependent') 'Review independence cannot be weakened.'
+    Require (-not (BoolField $runtime 'optionalHardeningInBatch')) 'Optional hardening remains outside the Batch.'
+    Require (-not (BoolField $runtime 'derivedStatusUpdate')) 'Derived status updates are deferred until authorized integration.'
+    if (BoolField $runtime 'simplify') { Require (-not (BoolField $runtime 'lowerHumanGate') -and -not (BoolField $runtime 'lowerIndependentReview') -and -not (BoolField $runtime 'lowerEvidence')) 'SIMPLIFY cannot lower mandatory controls.' }
+    return [ordered]@{classification="$change/$risk/$governanceProfile/$profile";minimumProfile=$minimum;risks=$risks;tests=$tests;coverageRows=$coverage.Count;budgets=$fixed;stop='PASS'}
+}
 function Clean([string]$path) {
     $r = Native 'git' @('status','--porcelain=v1','--untracked-files=all') $path
     Require ($r.code -eq 0 -and -not $r.text) "Dirty or unknown checkout: $path"
@@ -94,7 +175,7 @@ try {
     $script:repo = (Resolve-Path -LiteralPath (Field $p 'repo')).Path
     Require ((GitValue @('rev-parse','--show-toplevel')) -eq ($script:repo -replace '\\','/')) 'Package repo is not Git root.'
     $action = Field $p 'action'; $result.action = $action
-    Require ($action -in @('promote','integrate','status','terminal-close','worktree-remove','branch-delete','remote-check','close')) 'Unknown action.'
+    Require ($action -in @('governance-check','promote','integrate','status','terminal-close','worktree-remove','branch-delete','remote-check','close')) 'Unknown action.'
     $gate = Field $p 'gate'
     Require ($gate -in @('G3','G4','G5')) 'Invalid gate.'
     $main = Field $p 'mainRef'
@@ -104,6 +185,11 @@ try {
     $target = Field $p 'target'
     $result.before = Snapshot
     switch ($action) {
+        'governance-check' {
+            Require ($gate -eq 'G3') 'Governance baseline check requires G3.'
+            Require ($target -ceq (Field $p 'batch')) 'Batch target mismatch.'
+            $result.governance=GovernanceCheck $p
+        }
         'promote' {
             Require ($gate -in @('G3','G4')) 'Promotion requires G3/G4.'
             $path = Field $p 'path'; Require ($path -cmatch '^[A-Za-z0-9_./-]+$' -and -not $path.Contains('..')) 'Unsafe target path.'

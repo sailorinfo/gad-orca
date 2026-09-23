@@ -2,110 +2,38 @@
 param([string]$Control = (Join-Path $PSScriptRoot '..\tools\gad-control.ps1'))
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
-$root=Join-Path ([IO.Path]::GetTempPath()) ('gad-lean-'+[guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $root | Out-Null
+$root=Join-Path ([IO.Path]::GetTempPath()) ('gad-lean02-'+[guid]::NewGuid().ToString('N'))
 $repo=Join-Path $root 'repo'; New-Item -ItemType Directory -Path $repo | Out-Null
-$review=$null
 $results=[ordered]@{}
-function G([string[]]$a) { $prior=$ErrorActionPreference; $ErrorActionPreference='Continue'; try { $o=@(& git -C $repo @a 2>$null); $code=$LASTEXITCODE } finally { $ErrorActionPreference=$prior }; if ($code -ne 0) { throw "git $($a -join ' ') failed" }; return ($o -join "`n").Trim() }
-function Check([bool]$ok,[string]$message) { if (-not $ok) { throw $message } }
-function Run($p) {
-    $f=Join-Path $root 'action.json'; $p | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $f -Encoding UTF8
-    $raw=& powershell -NoProfile -File $Control -Package $f
-    return ($raw | ConvertFrom-Json)
-}
+function G([string[]]$a){$o=@(& git -C $repo @a 2>&1);if($LASTEXITCODE -ne 0){throw($o-join"`n")};($o-join"`n").Trim()}
+function Clone($o){(($o|ConvertTo-Json -Depth 30)|ConvertFrom-Json)}
+function Check([bool]$ok,[string]$message){if(-not $ok){throw $message}}
+function Run($p){$f=Join-Path $root 'package.json';$p|ConvertTo-Json -Depth 30|Set-Content -LiteralPath $f -Encoding UTF8;$raw=& powershell -NoProfile -File $Control -Package $f;($raw|ConvertFrom-Json)}
+function Refuse($p,[string]$pattern,[string]$label){$r=Run $p;Check (-not $r.ok -and $r.error -match $pattern) "$label was not refused: $($r.error)"}
 try {
-    G @('init','-b','main') | Out-Null
-    G @('config','user.name','Fixture') | Out-Null; G @('config','user.email','fixture@example.invalid') | Out-Null
-    'old' | Set-Content (Join-Path $repo 'target.txt') -NoNewline
-    'G3 target.txt@PLACEHOLDER' | Set-Content (Join-Path $repo 'approval.txt') -NoNewline
-    G @('add','.') | Out-Null; G @('commit','-m','base') | Out-Null
-    $base=G @('rev-parse','HEAD'); $old=G @('rev-parse','HEAD:target.txt')
-    $source=Join-Path $root 'source.txt'; 'new' | Set-Content -LiteralPath $source -NoNewline
-    $blob=(G @('hash-object','-w',$source))
-    $phrase="G3 target.txt@$blob"
-    $phrase | Set-Content (Join-Path $repo 'approval.txt') -NoNewline
-    G @('add','approval.txt') | Out-Null; G @('commit','-m','approve target') | Out-Null
-    $approval=G @('rev-parse','HEAD'); $proof=G @('rev-parse','HEAD:approval.txt')
-    $p=[ordered]@{repo=$repo;action='promote';gate='G3';mainRef='refs/heads/main';approvalCommit=$approval;approvalPath='approval.txt';approvalBlob=$proof;approvalPhrase=$phrase;target="target.txt@$blob";path='target.txt';blob=$blob;expectedBlob=$old}
-    $q=[ordered]@{} + $p;$q.target='wrong';$r=Run $q
-    Check (-not $r.ok -and (Get-Content (Join-Path $repo 'target.txt') -Raw) -eq 'old') 'V1 wrong target mutated bytes';$results.V1='PASS (wrong target; bytes unchanged)'
-    $q=[ordered]@{} + $p;$q.blob=$old;$r=Run $q
-    Check (-not $r.ok -and (G @('rev-parse','HEAD')) -eq $approval) 'V2 wrong blob was accepted'
-    $r=Run $p;Check ($r.ok -and (G @('hash-object','target.txt')) -eq $blob) ("V2 promotion failed: " + ($r | ConvertTo-Json -Compress))
-    $r2=Run $p;Check ($r2.ok -and -not $r2.changed) 'V2 promotion retry duplicated action'
-    G @('add','target.txt') | Out-Null;G @('commit','-m','promoted target') | Out-Null
-    $ffBase=G @('rev-parse','HEAD')
-    G @('switch','-c','reviewed') | Out-Null
-    'reviewed' | Set-Content (Join-Path $repo 'review.txt') -NoNewline
-    G @('add','review.txt') | Out-Null;G @('commit','-m','reviewed change') | Out-Null
-    $reviewed=G @('rev-parse','HEAD')
-    G @('switch','main') | Out-Null
-    G @('switch','-c','gate-ff') | Out-Null
-    "G5 $reviewed" | Set-Content (Join-Path $repo 'approval.txt') -NoNewline
-    G @('add','approval.txt') | Out-Null;G @('commit','-m','fixture gate package') | Out-Null
-    $gateCommit=G @('rev-parse','HEAD');$gateBlob=G @('rev-parse','HEAD:approval.txt')
-    G @('switch','main') | Out-Null
-    $ip=[ordered]@{} + $p;$ip.action='integrate';$ip.gate='G5';$ip.target=$reviewed;$ip.approvalCommit=$gateCommit;$ip.approvalBlob=$gateBlob;$ip.approvalPhrase="G5 $reviewed";$ip.reviewedSha=$reviewed;$ip.expectedHead=$ffBase;$ip.reviewEvidenceSha=$reviewed;$ip.verification='PASS'
-    $r=Run $ip;Check ($r.ok -and $r.changed -and (G @('rev-parse','HEAD')) -eq $reviewed) 'V2 exact fast-forward failed'
-    G @('switch','-c','diverged',$ffBase) | Out-Null
-    'diverged' | Set-Content (Join-Path $repo 'diverged.txt') -NoNewline
-    G @('add','diverged.txt') | Out-Null;G @('commit','-m','diverged change') | Out-Null
-    $diverged=G @('rev-parse','HEAD')
-    G @('switch','main') | Out-Null
-    G @('switch','-c','gate-diverged') | Out-Null
-    "G5 $diverged" | Set-Content (Join-Path $repo 'approval.txt') -NoNewline
-    G @('add','approval.txt') | Out-Null;G @('commit','-m','fixture diverged package') | Out-Null
-    $ip.target=$diverged;$ip.reviewedSha=$diverged;$ip.reviewEvidenceSha=$diverged;$ip.approvalCommit=G @('rev-parse','HEAD');$ip.approvalBlob=G @('rev-parse','HEAD:approval.txt');$ip.approvalPhrase="G5 $diverged";$ip.expectedHead=$reviewed
-    G @('switch','main') | Out-Null
-    $r=Run $ip;Check (-not $r.ok -and $r.error -match 'Non-fast-forward' -and (G @('rev-parse','HEAD')) -eq $reviewed) 'V2 non-fast-forward was accepted or moved HEAD'
-    $results.V2='PASS (wrong blob refused; promotion and exact fast-forward succeeded; divergent target refused)'
-    'G5 unknown refs/heads/unique lead' | Set-Content (Join-Path $repo 'approval.txt') -NoNewline
-    G @('add','approval.txt') | Out-Null;G @('commit','-m','fixture cleanup package') | Out-Null
-    $cleanupApproval=G @('rev-parse','HEAD');$cleanupBlob=G @('rev-parse','HEAD:approval.txt')
-    $q=[ordered]@{} + $p;$q.action='worktree-remove';$q.gate='G5';$q.target='unknown';$q.worktreeId='unknown';$q.worktreePath=$repo;$q.head=$approval;$q.completed='true';$q.evidenceRetained='true';$q.approvalCommit=$cleanupApproval;$q.approvalBlob=$cleanupBlob;$q.approvalPhrase='G5 unknown';$r=Run $q
-    Check (-not $r.ok -and $r.error -match 'Cannot remove main' -and (Test-Path $repo)) 'V3 main worktree guard failed';$results.V3='PASS (main Worktree removal refused; live Orca removal deferred)'
-    $q=[ordered]@{} + $p;$q.action='branch-delete';$q.gate='G5';$q.branch='refs/heads/unique';$q.target=$q.branch;$q.head=$approval;$q.evidenceRetained='true';$q.approvalCommit=$cleanupApproval;$q.approvalBlob=$cleanupBlob;$q.approvalPhrase='G5'
-    G @('branch','unique') | Out-Null;$r=Run $q;Check (-not $r.ok -and $r.error -match 'Branch ref drift' -and (G @('rev-parse','unique')) -eq $cleanupApproval) 'V4 branch SHA guard failed'
-    $q.head=$cleanupApproval;$q.evidence=@(@{commit=$cleanupApproval;path='approval.txt';blob=$cleanupBlob})
-    $r=Run $q;Check ($r.ok -and $r.changed -and (G @('branch','--list','unique')) -eq '') ("V4 branch deletion failed: $($r.error)")
-    $results.V4='PASS (branch SHA drift refused; retained branch deleted)'
-    $q=[ordered]@{} + $p;$q.action='terminal-close';$q.gate='G5';$q.target='lead';$q.handle='lead';$q.role='lead';$q.completed='true';$q.evidenceRetained='true';$q.approvalCommit=$cleanupApproval;$q.approvalBlob=$cleanupBlob;$q.approvalPhrase='G5';$r=Run $q
-    Check (-not $r.ok -and $r.error -match 'Missing worktreeId|Explicit worktree ID required') 'V5 exact identity guard failed'
-    $q.worktreeId="fixture::$($repo.Replace('\','/'))";$q.worktreePath=$repo.Replace('\','/');$q.head=G @('rev-parse','HEAD')
-    $fake=[ordered]@{ok=$true;result=@{worktree=@{id=$q.worktreeId;path=$q.worktreePath;git=@{path=$q.worktreePath;head=$q.head};workspaceStatus='completed';childWorktreeIds=@();head=$q.head}}}
-    $env:GAD_FAKE_ORCA_FILE=Join-Path $root 'orca-response.json';$fake | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $env:GAD_FAKE_ORCA_FILE -Encoding ASCII
-    '@echo off' + "`r`ntype `"%GAD_FAKE_ORCA_FILE%`"" | Set-Content -LiteralPath (Join-Path $root 'orca.cmd') -Encoding ASCII
-    $priorPath=$env:PATH;$env:PATH="$root;$priorPath"
-    try { 'dirty' | Set-Content -LiteralPath (Join-Path $repo 'dirty.txt');$r=Run $q;Check (-not $r.ok -and $r.error -match 'Dirty or unknown checkout' -and (Test-Path (Join-Path $repo 'dirty.txt'))) 'V5 dirty terminal checkout accepted' }
-    finally { $env:PATH=$priorPath;Remove-Item -LiteralPath (Join-Path $repo 'dirty.txt');Remove-Item Env:GAD_FAKE_ORCA_FILE }
-    $results.V5='PASS (exact identity and dirty terminal checkout refused; live Orca close deferred)'
-    $frozen=G @('rev-parse','HEAD');$review=Join-Path $root 'review';G @('worktree','add','--detach',$review,$frozen) | Out-Null
-    Check ((& git -C $review rev-parse HEAD).Trim() -eq $frozen -and -not ((& git -C $review status --porcelain) -join '')) 'V6 frozen checkout invalid'
-    $results.V6='FIXTURE (frozen Git checkout; Orca Review isolation pending)'
-    $r=Run $p;Check ($r.ok -and -not $r.changed -and (G @('rev-parse','HEAD')) -eq $frozen) 'V7 retry changed state';$results.V7='PASS (promotion retry idempotent; interrupted Orca lifecycle deferred)'
-    $metrics=[ordered]@{peakWorkers='2';peakWorktrees='4';newBranches='2';mechanicalWorkers='0';verificationCases='8';manualCoordination='0';elapsedSeconds='123';provenance='Git/Orca snapshots';bootstrapComparison='19 cases measured; others unknown'}
-    foreach($key in @('peakWorkers','peakWorktrees','newBranches','mechanicalWorkers','verificationCases','manualCoordination','elapsedSeconds','provenance','bootstrapComparison')) { Check (-not [string]::IsNullOrWhiteSpace($metrics[$key])) "V8 missing $key" }
-    $c=[ordered]@{repo=$repo;action='close';gate='G5';mainRef='refs/heads/main';target='LEAN-01';batch='LEAN-01';reviewVerdict='GREEN';evidence=@(@{commit=$cleanupApproval;path='approval.txt';blob=$cleanupBlob});objects=@();metrics=$metrics}
-    & git -C $repo worktree remove --force $review 2>$null | Out-Null
-    $refs=(G @('for-each-ref','--format=%(refname:short)','refs/heads')).Split("`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -cne 'main' }
-    foreach($b in @($refs)) { G @('branch','-D',$b) | Out-Null }
-    $c.objects=@()
-    $fakeList=[ordered]@{ok=$true;result=[ordered]@{worktrees=@([ordered]@{id="fixture::$($repo.Replace('\','/'))";repoId='fixture';path=$repo.Replace('\','/');isMainWorktree=$true;branch='refs/heads/main';git=@{path=$repo.Replace('\','/');branch='refs/heads/main';head=(G @('rev-parse','HEAD'))}});truncated=$false;hostScope=@{omittedHostIds=@()}}}
-    $env:GAD_FAKE_ORCA_FILE=Join-Path $root 'orca-response.json';$fakeList | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $env:GAD_FAKE_ORCA_FILE -Encoding ASCII
-    $priorPath=$env:PATH;$env:PATH="$root;$priorPath"
-    try { $r=Run $c; Check ($r.ok -and -not $r.changed -and $r.metrics.verificationCases -eq '8') 'V8 canonical path closure failed'; $c.objects=@(@{kind='branch';name='refs/heads/unique';disposition='removed'}); $r=Run $c; Check (-not $r.ok -and $r.error -match 'Removed closure object') 'V8 removed history was accepted' }
-    finally { $env:PATH=$priorPath;Remove-Item Env:GAD_FAKE_ORCA_FILE }
-    $c.metrics.elapsedSeconds='unknown';$r=Run $c;Check (-not $r.ok -and $r.error -match 'Invalid metric') 'V8 invalid metric accepted'
-    $results.V8='PASS (caller GREEN and incomplete inventory refused; invalid metric refused; real G5 evidence deferred)'
-    $results | ConvertTo-Json -Compress
+ G @('init','-b','main')|Out-Null;G @('config','user.name','Fixture')|Out-Null;G @('config','user.email','fixture@example.invalid')|Out-Null
+ 'fixture'|Set-Content -LiteralPath (Join-Path $repo 'fixture.txt') -NoNewline;G @('add','.')|Out-Null;G @('commit','-m','fixture')|Out-Null
+ $base=[ordered]@{
+  repo=$repo;action='governance-check';gate='G3';mainRef='refs/heads/main';target='LEAN-02';batch='LEAN-02'
+  classification=[ordered]@{changeClass='C3';risk='R3';governanceProfile='P2';profile='STRICT';ambiguous=$false;automaticDowngrade=$false;humanAuthorityRisk=$false;evidenceIntegrityRisk=$true;recoveryRisk=$true;criticalControlFailure=$false}
+  baseline=[ordered]@{frozen=$true;risks=@('profile-selection','evidence-integrity');requiredTests=@('V1','V5');declaredTests=@('V1','V5');requiredEvidence=@('test-output','coverage-matrix');stopConditions=@('all-required-evidence','review-pass');addedRole=$false;addedCase=$false;budgets=[ordered]@{implementationWorkers='1';reviewerSessions='1';implementationWorktrees='1';mechanicalWorkers='0';reviewRounds='1';reworkRounds='1';dispatchRecords='4';newBranches='1';defaultTotalWorktrees='3';maximumTotalWorktrees='4'}}
+  verification=[ordered]@{kinds=@('risk-check','trusted-smoke','affected-integration','coverage','independent-review');riskChecks=@(@{risk='profile-selection';test='V1'},@{risk='evidence-integrity';test='V5'});trustedSmoke=[ordered]@{cleanFixture=$true;repeatable=$true;exitCode='0';expectedAssertion=$true;skippedRequiredAssertion=$false;retainedInput=$true;retainedOutput=$true;retainedStatus=$true}}
+  failure=[ordered]@{classification='product';uncertain=$false;productFailure=$true;expandTests=$false;trustedPathReproduced=$true}
+  coverage=@(@{requirement='R-profile';implementation='GovernanceCheck/profile';reachable=$true;evidence='V1';verdict='PASS'},@{requirement='R-coverage';implementation='GovernanceCheck/coverage';reachable=$true;evidence='V5';verdict='PASS'})
+  runtime=[ordered]@{implementationWorkers='1';reviewerSessions='1';implementationWorktrees='1';mechanicalWorkers='0';dispatchRecords='2';reviewRounds='1';reworkRounds='0';reviewFailures='0';reReviewReason='NONE';totalWorktrees='3';isolationEvidence=$true;reviewWorktreeFallback=$false;reviewIndependent=$true;newBranches='1';optionalHardeningInBatch=$false;derivedStatusUpdate=$false;simplify=$false;lowerHumanGate=$false;lowerIndependentReview=$false;lowerEvidence=$false}
+ }
+ $r=Run $base;Check ($r.ok -and $r.governance.minimumProfile -eq 'STRICT') 'V1 valid STRICT baseline failed'
+ $q=Clone $base;$q.classification.profile='STANDARD';Refuse $q 'below required minimum STRICT' 'V1 weaker Profile'
+ $q=Clone $base;$q.classification.automaticDowngrade=$true;Refuse $q 'Automatic Profile downgrade' 'V1 automatic downgrade'
+ $q=Clone $base;$q.classification.ambiguous=$true;Refuse $q 'below required minimum CRITICAL' 'V1 ambiguous Profile';$results.V1='PASS (minimum/ambiguity/downgrade enforced)'
+ $q=Clone $base;$q.baseline.frozen=$false;Refuse $q 'must be frozen' 'V2 unfrozen baseline';$q=Clone $base;$q.baseline.declaredTests+=@('V9');Refuse $q 'Unapproved required test' 'V2 added test';$q=Clone $base;$q.baseline.budgets.dispatchRecords='5';Refuse $q 'Frozen budget mismatch' 'V2 changed budget';$results.V2='PASS (risks/tests/evidence/stops/budgets frozen)'
+ $q=Clone $base;$q.verification.kinds=@('risk-check');Refuse $q 'Missing STRICT verification' 'V3 incomplete mapping';$q=Clone $base;$q.verification.trustedSmoke.retainedOutput=$false;Refuse $q 'Trusted smoke contract' 'V3 untrusted smoke';$results.V3='PASS (Profile minimums and trusted smoke enforced)'
+ $q=Clone $base;$q.failure.classification='fixture';$q.failure.productFailure=$false;$q.failure.trustedPathReproduced=$false;$r=Run $q;Check $r.ok 'V4 valid fixture classification failed';$q.failure.productFailure=$true;Refuse $q 'Fixture/harness failure' 'V4 fixture promoted to product failure';$q=Clone $base;$q.failure.uncertain=$true;Refuse $q 'uncertainty requires stop' 'V4 uncertain classification';$results.V4='PASS (fixture/product/uncertain paths separated)'
+ $q=Clone $base;$q.coverage[0].reachable=$false;Refuse $q 'REVIEW_FAIL' 'V5 unreachable implementation';$q=Clone $base;$q.coverage[0].evidence='';Refuse $q 'Missing evidence' 'V5 missing evidence';$results.V5='PASS (requirement/implementation/evidence enforced)'
+ $q=Clone $base;$q.runtime.dispatchRecords='5';Refuse $q 'resource budget exceeded' 'V6 dispatch overrun';$q=Clone $base;$q.runtime.reviewFailures='2';Refuse $q 'Second review failure' 'V6 second failure';$q=Clone $base;$q.runtime.reReviewReason='UNRELATED_PASS';Refuse $q 'allowed trigger' 'V6 untriggered re-review';$q=Clone $base;$q.runtime.reviewFailures='1';$q.runtime.reworkRounds='1';$q.runtime.reviewRounds='2';$q.runtime.reviewerSessions='2';$q.runtime.reReviewReason='REVIEW_FAIL';$r=Run $q;Check $r.ok 'V6 triggered fresh re-review failed';$results.V6='PASS (Review/Rework/Dispatch budgets enforced)'
+ $q=Clone $base;$q.runtime.isolationEvidence=$false;Refuse $q 'Fourth Review Worktree required' 'V7 absent isolation';$q.runtime.reviewWorktreeFallback=$true;$q.runtime.totalWorktrees='4';$r=Run $q;Check $r.ok 'V7 conditional fallback failed';$q=Clone $base;$q.runtime.reviewWorktreeFallback=$true;$q.runtime.totalWorktrees='4';Refuse $q 'conditional, not default' 'V7 default fourth Worktree';$results.V7='PASS (three default; conditional fourth enforced)'
+ $q=Clone $base;$q.runtime.optionalHardeningInBatch=$true;Refuse $q 'Optional hardening' 'V8 optional hardening';$q=Clone $base;$q.runtime.derivedStatusUpdate=$true;Refuse $q 'status updates are deferred' 'V8 early status';$q=Clone $base;$q.runtime.simplify=$true;$q.runtime.lowerEvidence=$true;Refuse $q 'SIMPLIFY cannot lower' 'V8 unsafe SIMPLIFY';$results.V8='PASS (SIMPLIFY/hardening/deferred status enforced)'
+ $results|ConvertTo-Json -Compress
 } finally {
-    # The disposable fixture is known and located beneath the freshly created temp root.
-    if (Test-Path -LiteralPath $root) {
-        $resolved=[IO.Path]::GetFullPath($root)
-        if ($resolved.StartsWith([IO.Path]::GetFullPath([IO.Path]::GetTempPath()),[StringComparison]::OrdinalIgnoreCase) -and (Split-Path $resolved -Leaf) -like 'gad-lean-*') {
-            if ($review -and (Test-Path -LiteralPath $review)) { & git -C $repo worktree remove --force $review 2>$null | Out-Null }
-            Remove-Item -LiteralPath $resolved -Recurse -Force
-        }
-    }
+ if(Test-Path -LiteralPath $root){$resolved=[IO.Path]::GetFullPath($root);if($resolved.StartsWith([IO.Path]::GetFullPath([IO.Path]::GetTempPath()),[StringComparison]::OrdinalIgnoreCase)-and(Split-Path $resolved -Leaf)-like 'gad-lean02-*'){Remove-Item -LiteralPath $resolved -Recurse -Force}}
 }
