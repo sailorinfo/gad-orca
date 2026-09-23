@@ -67,3 +67,19 @@ G3 freezes the review and rework budget. A review failure returns to the origina
 For the first LEAN-02 Batch, the default Worktree budget is three: main, gad-lead, and one implementation Worktree. When the frozen Governance Profile requires Independent Review and Orca cannot provide evidence that a fresh Session has independent file-system isolation, a fourth independent Review Worktree is an allowed conditional fallback. It is not a default target, and the budget must never be used to weaken Review independence.
 
 When governance, coordination, or verification cost clearly exceeds the implementation complexity or risk reduction, Lead records `SIMPLIFY` before adding a role, Session, Worktree, test case, or review round. Derived status updates do not modify main before authorized integration; optional hardening remains outside the current Batch.
+
+## 8. LEAN-FINAL Lead Autonomy, User UX & Bootstrap
+
+LEAN-FINAL is the final bounded Lean optimization Initiative. Its remaining core scope is completed in at most two Delivery Batches, Batch A and Batch B. A further LEAN initiative is not created unless a new material governance risk is discovered and approved through the applicable Gate.
+
+During normal delivery, GAD Lead is the sole user communication and governance gateway. Workers report to Lead; users do not relay Worker messages, schedule ordinary Workers, or manually operate Worktrees, Branches, or Sessions. Lead continues through legal actions until a Human Gate, genuine unresolved blocker, or mode boundary.
+
+A Human Gate Decision Package must state current state, decision object, recommendation, supporting evidence, counter-risk, approval and rejection impact, exact approval/rejection text, authorized actions, excluded actions, and rollback or recovery. A Lead stop must additionally state the next action, executor, concrete operation, success condition, and what the system will do afterward.
+
+LEAN-FINAL metrics are deterministic summaries of existing Git, Orca, Lead state, terminal, orchestration, and Gate evidence. They measure external mentor intervention, manual Worktree operations, manual Branch operations, Worker message relay, ordinary Worker scheduling by the user, and Dead-End Stops. No telemetry service, database, or new state subsystem is introduced for these metrics.
+
+Bootstrap control-plane behavior must support empty or no-HEAD repositories, safe root commit creation, Orca registration, Lead startup, idempotent retry and recovery, and clear failure ownership. `doctor` reports a machine-checkable environment conclusion, blocking fact, repair instruction, and whether the same operation is safe to retry. Upgrade/migration is limited to v0.1 detection, safe-upgrade determination, and an explicit manual recovery instruction when unsafe; no general migration framework, cross-platform installer, or multi-version compatibility layer is introduced.
+
+Profile selection remains proportional: Human Authority, Lead Governance, and Bootstrap control-plane changes use STRICT when their actual risk requires it; deterministic CLI or doctor-only changes may use STANDARD; documentation and low-risk open-source metadata may use QUICK. The profile is selected from current C/R/P and concrete risks and frozen in G3. Human Gates, Independent Review, Evidence, and recovery boundaries remain mandatory.
+
+Until the Operating Model and tools are synchronized by a later approved G3, this section is the project-level source of truth for LEAN-FINAL semantics where older runtime wording conflicts. Synchronization may implement this approved meaning without another G4; any broader governance change requires a new G4.
