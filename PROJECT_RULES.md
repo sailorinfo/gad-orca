@@ -1,10 +1,10 @@
-# PROJECT RULES — gad-orca
+﻿# PROJECT RULES 鈥?gad-orca
 
 ## 1. Authority and project state
 
-The user owns product direction, high-risk decisions, and explicit scoped G1–G5 approvals. GAD Lead is the sole daily communication gateway between the user and specialist Workers. Workers report to Lead; they do not solicit Gate approval from the user. Lead coordinates, reconciles, reflects, verifies evidence, and prepares decision packages; it does not edit project files, implement product work, independently review its own dispatch, integrate without authorization, or approve a Gate.
+The user owns product direction, high-risk decisions, and explicit scoped G1鈥揋5 approvals. GAD Lead is the sole daily communication gateway between the user and specialist Workers. Workers report to Lead; they do not solicit Gate approval from the user. Lead coordinates, reconciles, reflects, verifies evidence, and prepares decision packages; it does not edit project files, implement product work, independently review its own dispatch, integrate without authorization, or approve a Gate.
 
-The project lifecycle is `IDEA → DEFINING → DEFINED → ARCHITECTING → BASELINED → ACTIVE → MAINTENANCE → RETIRED`. G1 establishes `DEFINED` and formal `PROJECT.md`. G2 approves the exact combined architecture and governance baseline. After approval and exact promotion, Governance synchronizes `ARCHITECTING → BASELINED → ACTIVE`; `BASELINED` is transitional, not a steady parking state. A project state change records an authorized fact; it does not create a product Delivery Batch.
+The project lifecycle is `IDEA 鈫?DEFINING 鈫?DEFINED 鈫?ARCHITECTING 鈫?BASELINED 鈫?ACTIVE 鈫?MAINTENANCE 鈫?RETIRED`. G1 establishes `DEFINED` and formal `PROJECT.md`. G2 approves the exact combined architecture and governance baseline. After approval and exact promotion, Governance synchronizes `ARCHITECTING 鈫?BASELINED 鈫?ACTIVE`; `BASELINED` is transitional, not a steady parking state. A project state change records an authorized fact; it does not create a product Delivery Batch.
 
 ## 2. Source of truth and permission
 
@@ -20,7 +20,7 @@ G1 approves the project definition; G2 approves the exact Architecture/Governanc
 
 ## 4. Proportional governance
 
-Governance classifies each bounded change by structural scope `C0–C4` and maximum concrete failure consequence `R0–R4`, then selects `P0–P3`. Financial-domain context alone is not R4. P0 and eligible P1 work may use a governance-confirmed lightweight execution baseline without G3, recording at least objective, scope, do-not-touch boundaries, expected change, and verification. P2/P3 require full readiness, explicit G3, strong verification, independent review, and G5. A controlled artifact still requires its applicable Gate regardless of profile. New evidence may escalate classification; material or fundamental baseline deviation is governed before affected execution continues.
+Governance classifies each bounded change by structural scope `C0鈥揅4` and maximum concrete failure consequence `R0鈥揜4`, then selects `P0鈥揚3`. Financial-domain context alone is not R4. P0 and eligible P1 work may use a governance-confirmed lightweight execution baseline without G3, recording at least objective, scope, do-not-touch boundaries, expected change, and verification. P2/P3 require full readiness, explicit G3, strong verification, independent review, and G5. A controlled artifact still requires its applicable Gate regardless of profile. New evidence may escalate classification; material or fundamental baseline deviation is governed before affected execution continues.
 
 The G2 project-baseline decision was assessed `C3 System / R3 High / P2 STRICT` because cross-module control and approval rules can propagate errors. This classification applies only to that G2 decision and does not pre-classify future product Batches.
 
@@ -47,3 +47,23 @@ That later G3 may update GAD_LEAD_OPERATING_MODEL.md, README, and related determ
 Lead may directly invoke deterministic control-plane actions for mechanical consequences already authorized by a formal Gate, including exact promotion, status synchronization, Terminal close, Worktree remove/archive, local Branch delete, remote SHA check, and Batch closure. Each action must bind exact objects, check preconditions and postconditions, and fail closed. It may not replace a Human Gate, make a new semantic decision, or widen the approved action scope.
 
 Independent Review defaults to a separate Session examining the frozen exact implementation commit, without Implementer chat context or permission to modify implementation. If Orca cannot demonstrably guarantee that Session independence, use the fourth Worktree. The Worktree Budget must never be used to weaken independent review.
+
+## 7. LEAN-02 Proportional Governance
+
+The governance profile is one of `QUICK`, `STANDARD`, `STRICT`, or `CRITICAL`. Lead must select it from the current C/R/P classification and the concrete failure risks, using the highest applicable constraint: P0 may use QUICK or STANDARD; P1 normally uses STANDARD and may use QUICK only when Governance records that no stronger control is required; P2 requires STRICT at minimum; P3 requires CRITICAL. A C2/C3 scope, R3 consequence, Human Authority risk, evidence integrity risk, or recovery risk raises the minimum to STRICT; C3/C4, R4, or failure of a critical control raises it to CRITICAL. Ambiguity selects the stronger profile. The selected profile is frozen in G3, cannot be automatically downgraded during execution, and may be upgraded when new material risk is discovered. If an upgrade expands approved implementation, verification, evidence, or authority scope, the affected work stops and re-enters the applicable Gate. `SIMPLIFY` may reduce coordination or optional work only; it may never lower Human Gate, Independent Review, or Evidence requirements.
+
+Before G3 implementation, the exact Batch baseline freezes: required risks, required verification, required evidence, explicit stop conditions, Worker/Session/Worktree/Branch/Review/Rework budgets, and the retention or cleanup disposition. A budget or stop condition is not advisory. Exceeding it stops the affected Batch and requires a new decision; it does not silently create work or tests.
+
+Risk maps to minimum sufficient verification: `QUICK` requires a deterministic check for each declared risk and a trusted smoke check; `STANDARD` adds affected-path integration verification; `STRICT` adds complete risk-to-test-to-evidence mapping and independent review; `CRITICAL` adds independent gate audit plus explicit failure/recovery evidence. A trusted smoke check is a repeatable command or script run against a clean, declared fixture that exits zero, asserts the expected observable result, records no skipped required assertion, and emits its input, output, and exit status as evidence. If no smoke check is applicable, the G3 baseline must state why and name the equivalent deterministic checks. Governance may require a stronger path when evidence warrants it, and may never weaken a mandatory control to save cost.
+
+A verification case is required only when it covers a declared risk, an observed failure, a changed contract, or a required control. After every required risk has sufficient evidence and every stop condition is satisfied, Lead stops test expansion. Optional hardening is recorded separately and cannot enter the current Batch implicitly.
+
+Fixture or harness failure must be classified separately from product failure. A fixture failure does not justify product rework or test expansion until the product behavior is reproduced through a trusted path using the declared clean fixture and deterministic command. Repeated fixture failure is a SIMPLIFY trigger and must not be converted into an unbounded verification loop.
+
+A review verdict requires a requirement → implementation → evidence → verdict coverage check. A required behavior that is unreachable, unbound, or absent from the implementation is a review failure even when unrelated tests pass. Re-review is created only after an actual review failure or material approved rework; no re-verifier is pre-created.
+
+G3 freezes the review and rework budget. A review failure returns to the original implementation ownership for bounded rework and then requires a fresh review of the new exact commit. A second failed review, a budget exhaustion, or a material new risk stops the Batch for Lead reflection and the applicable Human Gate.
+
+For the first LEAN-02 Batch, the default Worktree budget is three: main, gad-lead, and one implementation Worktree. When the frozen Governance Profile requires Independent Review and Orca cannot provide evidence that a fresh Session has independent file-system isolation, a fourth independent Review Worktree is an allowed conditional fallback. It is not a default target, and the budget must never be used to weaken Review independence.
+
+When governance, coordination, or verification cost clearly exceeds the implementation complexity or risk reduction, Lead records `SIMPLIFY` before adding a role, Session, Worktree, test case, or review round. Derived status updates do not modify main before authorized integration; optional hardening remains outside the current Batch.
