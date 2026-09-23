@@ -61,16 +61,19 @@ function GovernanceCheck($p) {
     $minimum=@{P0='QUICK';P1='STANDARD';P2='STRICT';P3='CRITICAL'}[$governanceProfile]
     if (($change -in @('C2','C3') -or $risk -eq 'R3' -or (BoolField $classification 'humanAuthorityRisk') -or (BoolField $classification 'evidenceIntegrityRisk') -or (BoolField $classification 'recoveryRisk')) -and $strength[$minimum] -lt 2) { $minimum='STRICT' }
     elseif (($change -eq 'C1' -or $risk -eq 'R2') -and $strength[$minimum] -lt 1) { $minimum='STANDARD' }
-    if ($change -eq 'C4' -or $risk -eq 'R4' -or (BoolField $classification 'criticalControlFailure')) { $minimum='CRITICAL' }
+    if ($change -in @('C3','C4') -or $risk -eq 'R4' -or (BoolField $classification 'criticalControlFailure')) { $minimum='CRITICAL' }
     if (BoolField $classification 'ambiguous') { $minimum=@{QUICK='STANDARD';STANDARD='STRICT';STRICT='CRITICAL';CRITICAL='CRITICAL'}[$minimum] }
     Require ($strength[$profile] -ge $strength[$minimum]) "Profile below required minimum $minimum."
     Require (-not (BoolField $classification 'automaticDowngrade')) 'Automatic Profile downgrade refused.'
+    $upgrade=[bool](BoolField $classification 'materialRiskUpgrade')
+    if ($upgrade) { Require (BoolField $classification 'stopForGate') 'Material risk upgrade must stop for Gate.'; Require (-not (BoolField $classification 'expandedAuthorization')) 'Material risk cannot expand authorization before Gate.' }
 
     $baseline=$p.baseline
     Require (BoolField $baseline 'frozen') 'G3 baseline must be frozen.'
     $risks=NonEmptyUnique $baseline 'risks'; $tests=NonEmptyUnique $baseline 'requiredTests'
     [void](NonEmptyUnique $baseline 'requiredEvidence'); [void](NonEmptyUnique $baseline 'stopConditions')
     $declared=Items $baseline 'declaredTests'
+    Require ($tests.Count -eq 8 -and @('V1','V2','V3','V4','V5','V6','V7','V8' | Where-Object { $tests -cnotcontains $_ }).Count -eq 0) 'Required tests must be exactly V1-V8.'
     Require ($declared.Count -eq $tests.Count -and @($declared | Where-Object { $tests -cnotcontains $_ }).Count -eq 0) 'Unapproved required test or missing frozen test.'
     Require (-not (BoolField $baseline 'addedRole') -and -not (BoolField $baseline 'addedCase')) 'Unapproved case or role refused.'
     $budgets=$baseline.budgets
@@ -85,6 +88,7 @@ function GovernanceCheck($p) {
     foreach($declaredRisk in $risks) { Require (@($riskChecks | Where-Object { (Field $_ 'risk') -ceq [string]$declaredRisk -and (Field $_ 'test') -in $tests }).Count -gt 0) "Risk lacks a frozen verification case: $declaredRisk." }
     $smoke=$verification.trustedSmoke
     Require ((BoolField $smoke 'cleanFixture') -and (BoolField $smoke 'repeatable') -and (CountField $smoke 'exitCode') -eq 0 -and (BoolField $smoke 'expectedAssertion') -and -not (BoolField $smoke 'skippedRequiredAssertion') -and (BoolField $smoke 'retainedInput') -and (BoolField $smoke 'retainedOutput') -and (BoolField $smoke 'retainedStatus')) 'Trusted smoke contract not satisfied.'
+    foreach($k in @('fixtureId','command','expectedOutput','retainedEvidenceId')) { [void](Field $smoke $k) }
 
     $failure=$p.failure
     $failureClass=Field $failure 'classification'; Require ($failureClass -in @('product','fixture','harness','environment','evidence-control')) 'Invalid failure classification.'
@@ -92,22 +96,27 @@ function GovernanceCheck($p) {
     if ($failureClass -in @('fixture','harness')) { Require (-not (BoolField $failure 'productFailure') -and -not (BoolField $failure 'expandTests') -and -not (BoolField $failure 'trustedPathReproduced')) 'Fixture/harness failure cannot become product failure or expand scope.' }
 
     $coverage=Items $p 'coverage'
-    Require ($coverage.Count -gt 0) 'Coverage matrix is required.'
+    Require ($coverage.Count -ge $tests.Count) 'Coverage matrix must cover every frozen test.'
+    $coverageRequirements=@($coverage | ForEach-Object { [string](Field $_ 'requirement') })
+    Require (@($coverageRequirements | Select-Object -Unique).Count -eq $coverageRequirements.Count) 'Coverage requirements must be unique.'
     foreach($row in $coverage) { [void](Field $row 'requirement'); [void](Field $row 'implementation'); [void](Field $row 'evidence'); Require ((BoolField $row 'reachable') -and (Field $row 'verdict') -ceq 'PASS') 'Missing or unreachable implementation is REVIEW_FAIL.' }
 
     $runtime=$p.runtime
     Require ((CountField $runtime 'implementationWorkers') -le 1 -and (CountField $runtime 'reviewerSessions') -le 2 -and (CountField $runtime 'implementationWorktrees') -le 1 -and (CountField $runtime 'mechanicalWorkers') -eq 0 -and (CountField $runtime 'dispatchRecords') -le 4 -and (CountField $runtime 'reviewRounds') -le 2 -and (CountField $runtime 'reworkRounds') -le 1 -and (CountField $runtime 'newBranches') -le 1) 'LEAN-02 resource budget exceeded.'
     Require ((CountField $runtime 'reviewFailures') -le 1) 'Second review failure stops the Batch.'
     $reason=Field $runtime 'reReviewReason'; Require ($reason -in @('NONE','REVIEW_FAIL','APPROVED_MATERIAL_REWORK')) 'Re-review lacks an allowed trigger.'
-    if ((CountField $runtime 'reviewRounds') -gt 1) { Require ($reason -cne 'NONE' -and (CountField $runtime 'reviewerSessions') -eq 2) 'Re-review requires REVIEW_FAIL or approved material rework and a fresh Session.' }
+    if ((CountField $runtime 'reviewRounds') -gt 1) {
+        Require ($reason -cne 'NONE' -and (CountField $runtime 'reviewerSessions') -eq 2 -and (CountField $runtime 'reviewFailures') -eq 1 -and (CountField $runtime 'reworkRounds') -eq 1) 'Re-review requires one actual failure, bounded rework, and a fresh Session.'
+        [void](Field $runtime 'freshReviewerSessionId'); Require (BoolField $runtime 'reviewIndependenceEvidence') 'Fresh re-review independence evidence required.'
+    }
     $total=CountField $runtime 'totalWorktrees'; $isolation=BoolField $runtime 'isolationEvidence'; $fallback=BoolField $runtime 'reviewWorktreeFallback'
-    Require ($total -ge 2 -and $total -le 4) 'Worktree budget exceeded.'
+    Require ($total -ge 3 -and $total -le 4) 'Default topology requires three Worktrees.'
     if ($profile -in @('STRICT','CRITICAL') -and -not $isolation) { Require ($fallback -and $total -eq 4) 'Fourth Review Worktree required when isolation evidence is absent.' }
     else { Require (-not $fallback -and $total -le 3) 'Fourth Review Worktree is conditional, not default.' }
     Require (BoolField $runtime 'reviewIndependent') 'Review independence cannot be weakened.'
     Require (-not (BoolField $runtime 'optionalHardeningInBatch')) 'Optional hardening remains outside the Batch.'
     Require (-not (BoolField $runtime 'derivedStatusUpdate')) 'Derived status updates are deferred until authorized integration.'
-    if (BoolField $runtime 'simplify') { Require (-not (BoolField $runtime 'lowerHumanGate') -and -not (BoolField $runtime 'lowerIndependentReview') -and -not (BoolField $runtime 'lowerEvidence')) 'SIMPLIFY cannot lower mandatory controls.' }
+    Require (-not (BoolField $runtime 'lowerHumanGate') -and -not (BoolField $runtime 'lowerIndependentReview') -and -not (BoolField $runtime 'lowerEvidence')) 'Mandatory controls cannot be lowered.'
     return [ordered]@{classification="$change/$risk/$governanceProfile/$profile";minimumProfile=$minimum;risks=$risks;tests=$tests;coverageRows=$coverage.Count;budgets=$fixed;stop='PASS'}
 }
 function Clean([string]$path) {
