@@ -14,7 +14,8 @@ try{
  if($ReplayS2Evidence){
    $prior=[IO.File]::ReadAllText((Resolve-Path -LiteralPath $ReplayS2Evidence),[Text.Encoding]::UTF8)|ConvertFrom-Json
    if($prior.scenarioId -cne 'S2' -or -not $prior.result.activeBound){throw 'Replay source is not retained active S2 Evidence.'}
-   $external=$prior.result.external
+   $record=$prior.result.external
+   $external=[ordered]@{source='orca';active=$true;action=$record.action;exactObject=$record.exactObject;dispatchId=$record.dispatchId;sessionId=$record.sessionId;liveness=$record.liveness;observedAt=$record.observedAt;provenance=$record.provenance}
    if($external.dispatchId -cne $DispatchId -or $external.sessionId -cne $SessionId){throw 'Replay source dispatch/session mismatch.'}
    $now=$external.observedAt
  }else{
