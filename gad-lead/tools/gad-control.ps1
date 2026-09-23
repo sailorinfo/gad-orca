@@ -154,6 +154,7 @@ try {
             Require ($gate -eq 'G5') 'Cleanup requires G5.'
             $handle=Field $p 'handle'; Require ($target -ceq $handle) 'Handle mismatch.'
             $w=ExactWorktree $p
+            Clean $w.path
             $t=(Orca @('terminal','show','--terminal',$handle)).result.terminal
             Require ($null -ne $t -and $t.handle -ceq $handle -and $t.worktreeId -ceq $w.id -and $t.worktreePath -ceq $w.path -and $t.branch -ceq $w.branch) 'Terminal ownership drift.'
             Require ($t.incarnationId -ceq (Field $p 'incarnationId') -and $t.ptyId -ceq (Field $p 'ptyId')) 'Terminal incarnation drift.'
@@ -231,14 +232,53 @@ try {
             foreach($key in @('peakWorkers','peakWorktrees','newBranches','mechanicalWorkers','verificationCases','manualCoordination','elapsedSeconds')) { Require ((Field $metrics $key) -cmatch '^(0|[1-9][0-9]*)$') "Invalid metric $key." }
             $objects=@($p.objects)
             Require ($objects.Count -gt 0) 'Reconciled objects required.'
+            # A current inventory can prove retained objects. Removed objects have no
+            # current identity to verify, so this tool cannot certify their history.
+            $gitTrees=GitValue @('worktree','list','--porcelain')
+            $gitBranches=GitValue @('for-each-ref','--format=%(refname)','refs/heads')
+            $allTrees=(Orca @('worktree','list')).result
+            Require ($allTrees.truncated -eq $false -and $null -ne $allTrees.worktrees -and @($allTrees.hostScope.omittedHostIds).Count -eq 0) 'Complete Orca Worktree inventory unavailable.'
+            $mainTrees=@($allTrees.worktrees | Where-Object { $_.isMainWorktree -eq $true -and $_.path -ceq $script:repo })
+            Require ($mainTrees.Count -eq 1) 'Repository Orca identity unavailable.'
+            $repoId=$mainTrees[0].repoId
+            $tracked=@($allTrees.worktrees | Where-Object { $_.repoId -ceq $repoId })
+            $actual=@()
+            foreach($w in $tracked) {
+                Require ($w.id -ceq "${repoId}::$($w.path)" -and $w.git.path -ceq $w.path -and $w.git.branch -ceq $w.branch) 'Orca Worktree inventory drift.'
+                Require (($gitTrees -split "`n") -ccontains "worktree $($w.path)") 'Git/Orca Worktree inventory mismatch.'
+                if (-not $w.isMainWorktree -and $w.branch -cne 'refs/heads/gad-lead') {
+                    $actual+= "worktree|$($w.path)"
+                    $terms=(Orca @('terminal','list','--worktree',"id:$($w.id)")).result
+                    Require ($terms.truncated -eq $false -and $null -ne $terms.terminals -and @($terms.hostScope.omittedHostIds).Count -eq 0 -and $terms.totalCount -eq @($terms.terminals).Count) 'Complete Orca Terminal inventory unavailable.'
+                    foreach($t in $terms.terminals) {
+                        Require ($t.worktreeId -ceq $w.id -and $t.worktreePath -ceq $w.path -and $t.branch -ceq $w.branch) 'Orca Terminal inventory drift.'
+                        $actual+= "terminal|$($t.handle)"
+                    }
+                }
+            }
+            foreach($line in ($gitTrees -split "`n")) {
+                if ($line -like 'worktree *') {
+                    $path=$line.Substring(9)
+                    Require (@($tracked | Where-Object { $_.path -ceq $path }).Count -eq 1) 'Untracked Git Worktree in repository inventory.'
+                }
+            }
+            foreach($branch in ($gitBranches -split "`n")) {
+                if ($branch -and $branch -cne $main -and $branch -cne 'refs/heads/gad-lead') { $actual+= "branch|$branch" }
+            }
+            Require ($actual.Count -eq @($actual | Select-Object -Unique).Count) 'Duplicate current inventory entry.'
+            $supplied=@()
             foreach($o in $objects) {
                 $kind=Field $o 'kind'; $name=Field $o 'name'; $disposition=Field $o 'disposition'
                 Require ($disposition -ceq 'retained' -or $disposition -ceq 'removed') 'Unknown object disposition.'
+                Require ($disposition -ceq 'retained') 'Removed closure object cannot be verified from current inventory.'
                 if ($kind -ceq 'branch') { Require ($name -cmatch '^refs/heads/[A-Za-z0-9_./-]+$') 'Unsafe closure branch.'; $exists=(Git @('show-ref','--verify',$name)).code -eq 0 }
                 elseif ($kind -ceq 'worktree') { $list=GitValue @('worktree','list','--porcelain'); $exists=($list -split "`n") -ccontains "worktree $name" }
+                elseif ($kind -ceq 'terminal') { $exists=($actual -ccontains "terminal|$name") }
                 else { throw 'Unknown closure object kind.' }
                 Require ($exists -eq ($disposition -ceq 'retained')) 'Closure object drift.'
+                $supplied+= "$kind|$name"
             }
+            Require ($supplied.Count -eq @($supplied | Select-Object -Unique).Count -and $supplied.Count -eq $actual.Count -and @($actual | Where-Object { $supplied -cnotcontains $_ }).Count -eq 0) 'Closure disposition omits or adds repository objects.'
             $result.metrics=$metrics
             $result.objects=$objects
             $result.targetBefore=@{batch=$target;objects=$objects;reviewVerdict='GREEN'}

@@ -71,7 +71,15 @@ try {
     $r=Run $q;Check ($r.ok -and $r.changed -and (G @('branch','--list','unique')) -eq '') ("V4 branch deletion failed: $($r.error)")
     $results.V4='PASS (branch SHA drift refused; retained branch deleted)'
     $q=[ordered]@{} + $p;$q.action='terminal-close';$q.gate='G5';$q.target='lead';$q.handle='lead';$q.role='lead';$q.completed='true';$q.evidenceRetained='true';$q.approvalCommit=$cleanupApproval;$q.approvalBlob=$cleanupBlob;$q.approvalPhrase='G5';$r=Run $q
-    Check (-not $r.ok -and $r.error -match 'Missing worktreeId|Explicit worktree ID required') 'V5 exact identity guard failed';$results.V5='PASS (terminal close without exact Worktree identity refused; live Orca close deferred)'
+    Check (-not $r.ok -and $r.error -match 'Missing worktreeId|Explicit worktree ID required') 'V5 exact identity guard failed'
+    $q.worktreeId="fixture::$($repo.Replace('\','/'))";$q.worktreePath=$repo.Replace('\','/');$q.head=G @('rev-parse','HEAD')
+    $fake=[ordered]@{ok=$true;result=@{worktree=@{id=$q.worktreeId;path=$q.worktreePath;git=@{path=$q.worktreePath;head=$q.head};workspaceStatus='completed';childWorktreeIds=@();head=$q.head}}}
+    $env:GAD_FAKE_ORCA_FILE=Join-Path $root 'orca-response.json';$fake | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $env:GAD_FAKE_ORCA_FILE -Encoding ASCII
+    '@echo off' + "`r`ntype `"%GAD_FAKE_ORCA_FILE%`"" | Set-Content -LiteralPath (Join-Path $root 'orca.cmd') -Encoding ASCII
+    $priorPath=$env:PATH;$env:PATH="$root;$priorPath"
+    try { 'dirty' | Set-Content -LiteralPath (Join-Path $repo 'dirty.txt');$r=Run $q;Check (-not $r.ok -and $r.error -match 'Dirty or unknown checkout' -and (Test-Path (Join-Path $repo 'dirty.txt'))) 'V5 dirty terminal checkout accepted' }
+    finally { $env:PATH=$priorPath;Remove-Item -LiteralPath (Join-Path $repo 'dirty.txt');Remove-Item Env:GAD_FAKE_ORCA_FILE }
+    $results.V5='PASS (exact identity and dirty terminal checkout refused; live Orca close deferred)'
     $frozen=G @('rev-parse','HEAD');$review=Join-Path $root 'review';G @('worktree','add','--detach',$review,$frozen) | Out-Null
     Check ((& git -C $review rev-parse HEAD).Trim() -eq $frozen -and -not ((& git -C $review status --porcelain) -join '')) 'V6 frozen checkout invalid'
     $results.V6='FIXTURE (frozen Git checkout; Orca Review isolation pending)'
@@ -79,9 +87,9 @@ try {
     $metrics=[ordered]@{peakWorkers='2';peakWorktrees='4';newBranches='2';mechanicalWorkers='0';verificationCases='8';manualCoordination='0';elapsedSeconds='123';provenance='Git/Orca snapshots';bootstrapComparison='19 cases measured; others unknown'}
     foreach($key in @('peakWorkers','peakWorktrees','newBranches','mechanicalWorkers','verificationCases','manualCoordination','elapsedSeconds','provenance','bootstrapComparison')) { Check (-not [string]::IsNullOrWhiteSpace($metrics[$key])) "V8 missing $key" }
     $c=[ordered]@{repo=$repo;action='close';gate='G5';mainRef='refs/heads/main';target='LEAN-01';batch='LEAN-01';reviewVerdict='GREEN';evidence=@(@{commit=$cleanupApproval;path='approval.txt';blob=$cleanupBlob});objects=@(@{kind='branch';name='refs/heads/unique';disposition='removed'});metrics=$metrics}
-    $r=Run $c;Check ($r.ok -and -not $r.changed -and $r.metrics.verificationCases -eq '8') ("V8 checked closure failed: $($r.error)")
+    $r=Run $c;Check (-not $r.ok -and -not $r.changed -and $r.error -match 'inventory|Orca') 'V8 caller GREEN and omitted current objects asserted closure'
     $c.metrics.elapsedSeconds='unknown';$r=Run $c;Check (-not $r.ok -and $r.error -match 'Invalid metric') 'V8 invalid metric accepted'
-    $results.V8='PASS (checked closure result and invalid metric refusal; real G5 evidence deferred)'
+    $results.V8='PASS (caller GREEN and incomplete inventory refused; invalid metric refused; real G5 evidence deferred)'
     $results | ConvertTo-Json -Compress
 } finally {
     # The disposable fixture is known and located beneath the freshly created temp root.
