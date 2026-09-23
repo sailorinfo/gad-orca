@@ -46,3 +46,16 @@ Before `REVIEW_PASS`, Reviewer completes a fresh requirement → implementation 
 G3 freezes these budgets. The default LEAN-02 first Batch budget is: one implementation Worker, one independent Reviewer Session, one implementation Worktree, no dedicated mechanical Worker, at most one initial Review round, and at most one bounded Rework round. The default Worktree total is three including main and gad-lead. If the frozen profile requires Independent Review and Orca cannot evidence file-system isolation for a fresh Session, a fourth independent Review Worktree is permitted as a conditional fallback. It is never a reason to reduce Review independence. Exceeding any budget stops the Batch and returns to Lead reflection; it does not trigger automatic role or test creation. A second review failure or any material scope/risk change requires a new decision package.
 
 When required evidence and stop conditions are satisfied, Lead stops verification expansion and records any optional hardening separately. If the governance cost is disproportionate to the risk reduction, Lead records `SIMPLIFY` before adding work. Status and other derived updates remain off main until the authorized integration point, preventing unnecessary commit-chain disturbance.
+
+## 8. LEAN-FINAL Delivery Workflow
+
+LEAN-FINAL uses at most two Delivery Batches:
+
+1. **Batch A ? Lead Autonomy & Direct UX (STRICT when Human Authority or Lead Governance risk applies):** User Handoff Contract, No Dead-End Stop, Gate Decision Advisor, Lead-only normal interaction, deterministic metrics from existing evidence, and default Simplified Chinese output.
+2. **Batch B ? Bootstrap & Recovery UX (STRICT for root/registration/recovery control-plane risk; STANDARD for isolated deterministic doctor/CLI paths; QUICK for documentation and low-risk metadata):** one-command bootstrap, empty/no-HEAD handling, safe root commit, Orca registration, Lead startup, idempotent retry/recovery, doctor conclusions and repair guidance, and the minimal v0.1 upgrade/migration path.
+
+Each G3 freezes the Batch Profile, Required Risks, Required Tests, Required Evidence, Stop Conditions, Worker/Session/Worktree/Branch budgets, and Review/Rework budget. Batch A and Batch B do not create a successor Lean Initiative. Optional hardening, general migration architecture, cross-platform installer work, telemetry, databases, and speculative orchestration remain outside both Batches.
+
+The ordinary user path hides `start`, `resume`, and `transition` behind the Lead-facing entrypoint. These control-plane operations remain deterministic, idempotent, and fail closed. They may not cross a Human Gate, invent approval, weaken Independent Review, or silently broaden scope.
+
+Acceptance requires evidence for all six normal-path success indicators: external mentor intervention = 0, manual Worktree operations = 0, manual Branch operations = 0, Worker message relay = 0, ordinary Worker scheduling by user = 0, and Dead-End Stop = 0. The evidence is reconstructed from existing Git, Orca, Lead, orchestration, and Gate records; no new telemetry or state subsystem may be added.
