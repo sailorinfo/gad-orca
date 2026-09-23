@@ -91,6 +91,8 @@ function Parse-Arguments {
         Strict   = $false
         Role     = $null
         Preference = $null
+        Input    = $null
+        EvidenceRoot = $null
     }
 
     for ($i = $startAt; $i -lt $Tokens.Count; $i++) {
@@ -103,6 +105,8 @@ function Parse-Arguments {
                 'mode'    { $options.Mode = $value.ToLowerInvariant() }
                 'role'    { $options.Role = $value.ToLowerInvariant() }
                 'preference' { $options.Preference = $value.ToLowerInvariant() }
+                'input' { $options.Input = $value }
+                'evidence-root' { $options.EvidenceRoot = $value }
                 default   { throw "Unknown option: --$name" }
             }
             continue
@@ -117,6 +121,8 @@ function Parse-Arguments {
             '--strict'   { $options.Strict = $true }
             '--role'     { $options.Role = (Get-ArgValue -Tokens $Tokens -Index ([ref]$i) -Name '--role').ToLowerInvariant() }
             '--preference' { $options.Preference = (Get-ArgValue -Tokens $Tokens -Index ([ref]$i) -Name '--preference').ToLowerInvariant() }
+            '--input' { $options.Input = Get-ArgValue -Tokens $Tokens -Index ([ref]$i) -Name '--input' }
+            '--evidence-root' { $options.EvidenceRoot = Get-ArgValue -Tokens $Tokens -Index ([ref]$i) -Name '--evidence-root' }
             '--help'     { $options.Command = 'help' }
             default      { throw "Unknown argument: $token" }
         }
@@ -1225,6 +1231,7 @@ Commands:
   transition Transition the existing live GAD Lead mode
   status     Show project / Worktree / Terminal state
   agent      Resolve one role's Agent Preference (primarily for GAD Lead itself)
+  scenario   Execute one bounded S1/S2/S3 behavior and retain content-addressed Evidence
   doctor     Read-only prerequisite and conflict checks
   help       Show this help
   version    Show version
@@ -1238,6 +1245,8 @@ Options:
   --strict          doctor only
   --role <role>     agent only: lead|implementation|review|other (other for all unlisted roles)
   --preference <id> agent only: one-time explicit preference; invalid/unavailable falls back to Orca Default
+  --input <path>     scenario only: exact JSON fixture or controlled input
+  --evidence-root <path> scenario only: test override; default is shared git-common-dir/gad-evidence
 
 Examples:
   .\gad-lead\gad-lead.cmd doctor
@@ -1795,6 +1804,16 @@ try {
             $role = if ($options.Role) { $options.Role } else { 'other' }
             $result = Resolve-GadAgentPreference -ProjectRoot $projectRoot -Role $role -PreferenceOverride $options.Preference
             Complete -Data $result -AsJson:$options.Json -ExitCode 0
+        }
+        'scenario' {
+            if (-not $options.Input) { throw 'scenario requires --input <json-file>.' }
+            $scenarioTool = Join-Path $projectRoot 'gad-lead\tools\gad-scenario.ps1'
+            if (-not (Test-Path -LiteralPath $scenarioTool -PathType Leaf)) { throw "Missing scenario tool: $scenarioTool" }
+            $scenarioArgs = @('-Project', $projectRoot, '-InputPath', $options.Input)
+            if ($options.EvidenceRoot) { $scenarioArgs += @('-EvidenceRoot', $options.EvidenceRoot) }
+            $result = Invoke-Native -File 'powershell' -Arguments (@('-NoProfile', '-File', $scenarioTool) + $scenarioArgs) -WorkingDirectory $projectRoot
+            if (-not [string]::IsNullOrWhiteSpace($result.Text)) { Write-Output $result.Text }
+            exit $result.ExitCode
         }
         'start' {
             $result = Start-Or-ResumeLead -ProjectRoot $projectRoot -Mode $options.Mode -ResumeOnly:$false -Activate:$options.Activate -DryRun:$options.DryRun
