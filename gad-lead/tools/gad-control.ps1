@@ -231,7 +231,7 @@ try {
             foreach($key in @('peakWorkers','peakWorktrees','newBranches','mechanicalWorkers','verificationCases','manualCoordination','elapsedSeconds','provenance','bootstrapComparison')) { [void](Field $metrics $key) }
             foreach($key in @('peakWorkers','peakWorktrees','newBranches','mechanicalWorkers','verificationCases','manualCoordination','elapsedSeconds')) { Require ((Field $metrics $key) -cmatch '^(0|[1-9][0-9]*)$') "Invalid metric $key." }
             $objects=@($p.objects)
-            Require ($objects.Count -gt 0) 'Reconciled objects required.'
+            Require ($null -ne $p.objects) 'Reconciled objects field required.'
             # A current inventory can prove retained objects. Removed objects have no
             # current identity to verify, so this tool cannot certify their history.
             $gitTrees=GitValue @('worktree','list','--porcelain')

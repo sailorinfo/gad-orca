@@ -86,7 +86,7 @@ try {
     $r=Run $p;Check ($r.ok -and -not $r.changed -and (G @('rev-parse','HEAD')) -eq $frozen) 'V7 retry changed state';$results.V7='PASS (promotion retry idempotent; interrupted Orca lifecycle deferred)'
     $metrics=[ordered]@{peakWorkers='2';peakWorktrees='4';newBranches='2';mechanicalWorkers='0';verificationCases='8';manualCoordination='0';elapsedSeconds='123';provenance='Git/Orca snapshots';bootstrapComparison='19 cases measured; others unknown'}
     foreach($key in @('peakWorkers','peakWorktrees','newBranches','mechanicalWorkers','verificationCases','manualCoordination','elapsedSeconds','provenance','bootstrapComparison')) { Check (-not [string]::IsNullOrWhiteSpace($metrics[$key])) "V8 missing $key" }
-    $c=[ordered]@{repo=$repo;action='close';gate='G5';mainRef='refs/heads/main';target='LEAN-01';batch='LEAN-01';reviewVerdict='GREEN';evidence=@(@{commit=$cleanupApproval;path='approval.txt';blob=$cleanupBlob});objects=@(@{kind='branch';name='refs/heads/unique';disposition='removed'});metrics=$metrics}
+    $c=[ordered]@{repo=$repo;action='close';gate='G5';mainRef='refs/heads/main';target='LEAN-01';batch='LEAN-01';reviewVerdict='GREEN';evidence=@(@{commit=$cleanupApproval;path='approval.txt';blob=$cleanupBlob});objects=@();metrics=$metrics}
     $r=Run $c;Check (-not $r.ok -and -not $r.changed -and $r.error -match 'inventory|Orca') 'V8 caller GREEN and omitted current objects asserted closure'
     $c.metrics.elapsedSeconds='unknown';$r=Run $c;Check (-not $r.ok -and $r.error -match 'Invalid metric') 'V8 invalid metric accepted'
     $results.V8='PASS (caller GREEN and incomplete inventory refused; invalid metric refused; real G5 evidence deferred)'
