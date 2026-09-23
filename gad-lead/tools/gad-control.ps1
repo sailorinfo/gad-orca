@@ -23,6 +23,7 @@ function GitValue([string[]]$argv) {
     return $r.text
 }
 function ExactSha([string]$value) { Require ($value -cmatch '^[0-9a-f]{40}$') 'Expected a full lowercase SHA-1.' }
+function CanonicalPath([string]$value) { return (([IO.Path]::GetFullPath($value)) -replace '\\','/').TrimEnd('/') }
 function Field($obj, [string]$name) {
     $p = $obj.PSObject.Properties[$name]
     Require ($null -ne $p -and -not [string]::IsNullOrWhiteSpace([string]$p.Value)) "Missing $name."
@@ -238,13 +239,13 @@ try {
             $gitBranches=GitValue @('for-each-ref','--format=%(refname)','refs/heads')
             $allTrees=(Orca @('worktree','list')).result
             Require ($allTrees.truncated -eq $false -and $null -ne $allTrees.worktrees -and @($allTrees.hostScope.omittedHostIds).Count -eq 0) 'Complete Orca Worktree inventory unavailable.'
-            $mainTrees=@($allTrees.worktrees | Where-Object { $_.isMainWorktree -eq $true -and $_.path -ceq $script:repo })
+            $mainTrees=@($allTrees.worktrees | Where-Object { $_.isMainWorktree -eq $true -and (CanonicalPath $_.path) -ceq (CanonicalPath $script:repo) })
             Require ($mainTrees.Count -eq 1) 'Repository Orca identity unavailable.'
             $repoId=$mainTrees[0].repoId
             $tracked=@($allTrees.worktrees | Where-Object { $_.repoId -ceq $repoId })
             $actual=@()
             foreach($w in $tracked) {
-                Require ($w.id -ceq "${repoId}::$($w.path)" -and $w.git.path -ceq $w.path -and $w.git.branch -ceq $w.branch) 'Orca Worktree inventory drift.'
+                Require ($w.id -ceq "${repoId}::$($w.path)" -and (CanonicalPath $w.git.path) -ceq (CanonicalPath $w.path) -and $w.git.branch -ceq $w.branch) 'Orca Worktree inventory drift.'
                 Require (($gitTrees -split "`n") -ccontains "worktree $($w.path)") 'Git/Orca Worktree inventory mismatch.'
                 if (-not $w.isMainWorktree -and $w.branch -cne 'refs/heads/gad-lead') {
                     $actual+= "worktree|$($w.path)"
@@ -259,7 +260,7 @@ try {
             foreach($line in ($gitTrees -split "`n")) {
                 if ($line -like 'worktree *') {
                     $path=$line.Substring(9)
-                    Require (@($tracked | Where-Object { $_.path -ceq $path }).Count -eq 1) 'Untracked Git Worktree in repository inventory.'
+                    Require (@($tracked | Where-Object { (CanonicalPath $_.path) -ceq (CanonicalPath $path) }).Count -eq 1) 'Untracked Git Worktree in repository inventory.'
                 }
             }
             foreach($branch in ($gitBranches -split "`n")) {

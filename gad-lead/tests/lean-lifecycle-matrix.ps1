@@ -87,7 +87,15 @@ try {
     $metrics=[ordered]@{peakWorkers='2';peakWorktrees='4';newBranches='2';mechanicalWorkers='0';verificationCases='8';manualCoordination='0';elapsedSeconds='123';provenance='Git/Orca snapshots';bootstrapComparison='19 cases measured; others unknown'}
     foreach($key in @('peakWorkers','peakWorktrees','newBranches','mechanicalWorkers','verificationCases','manualCoordination','elapsedSeconds','provenance','bootstrapComparison')) { Check (-not [string]::IsNullOrWhiteSpace($metrics[$key])) "V8 missing $key" }
     $c=[ordered]@{repo=$repo;action='close';gate='G5';mainRef='refs/heads/main';target='LEAN-01';batch='LEAN-01';reviewVerdict='GREEN';evidence=@(@{commit=$cleanupApproval;path='approval.txt';blob=$cleanupBlob});objects=@();metrics=$metrics}
-    $r=Run $c;Check (-not $r.ok -and -not $r.changed -and $r.error -match 'inventory|Orca') 'V8 caller GREEN and omitted current objects asserted closure'
+    & git -C $repo worktree remove --force $review 2>$null | Out-Null
+    $refs=(G @('for-each-ref','--format=%(refname:short)','refs/heads')).Split("`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -cne 'main' }
+    foreach($b in @($refs)) { G @('branch','-D',$b) | Out-Null }
+    $c.objects=@()
+    $fakeList=[ordered]@{ok=$true;result=[ordered]@{worktrees=@([ordered]@{id="fixture::$($repo.Replace('\','/'))";repoId='fixture';path=$repo.Replace('\','/');isMainWorktree=$true;branch='refs/heads/main';git=@{path=$repo.Replace('\','/');branch='refs/heads/main';head=(G @('rev-parse','HEAD'))}});truncated=$false;hostScope=@{omittedHostIds=@()}}}
+    $env:GAD_FAKE_ORCA_FILE=Join-Path $root 'orca-response.json';$fakeList | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $env:GAD_FAKE_ORCA_FILE -Encoding ASCII
+    $priorPath=$env:PATH;$env:PATH="$root;$priorPath"
+    try { $r=Run $c; Check ($r.ok -and -not $r.changed -and $r.metrics.verificationCases -eq '8') 'V8 canonical path closure failed'; $c.objects=@(@{kind='branch';name='refs/heads/unique';disposition='removed'}); $r=Run $c; Check (-not $r.ok -and $r.error -match 'Removed closure object') 'V8 removed history was accepted' }
+    finally { $env:PATH=$priorPath;Remove-Item Env:GAD_FAKE_ORCA_FILE }
     $c.metrics.elapsedSeconds='unknown';$r=Run $c;Check (-not $r.ok -and $r.error -match 'Invalid metric') 'V8 invalid metric accepted'
     $results.V8='PASS (caller GREEN and incomplete inventory refused; invalid metric refused; real G5 evidence deferred)'
     $results | ConvertTo-Json -Compress
