@@ -40,6 +40,15 @@ function CanonicalJson($Object) {
     return ($Object | ConvertTo-Json -Depth 32 -Compress)
 }
 
+function Assert-JsonRoundTrip([string]$Json, [string]$ExpectedScenario) {
+    $strict = New-Object Text.UTF8Encoding($false, $true)
+    $bytes = $strict.GetBytes($Json)
+    $decoded = $strict.GetString($bytes)
+    $parsed = $decoded | ConvertFrom-Json
+    Require ((Text $parsed 'scenarioId') -ceq $ExpectedScenario) 'Evidence JSON round-trip changed scenario identity.'
+    return $bytes
+}
+
 function Sha256([string]$Value) {
     $bytes = [Text.Encoding]::UTF8.GetBytes($Value)
     $sha = [Security.Cryptography.SHA256]::Create()
@@ -113,7 +122,7 @@ function Invoke-S2($Data) {
     return [ordered]@{ scenarioId='S2'; ok=$true; activeBound=$true; external=[ordered]@{action=$external.action;exactObject=$external.exactObject;dispatchId=$external.dispatchId;sessionId=$external.sessionId;liveness=$external.liveness;observedAt=$external.observedAt;provenance=$provenance}; wait=(-not $unchanged); waitSeconds=$waitSeconds; nextAction=$(if($unchanged){'RECONCILE'}else{'WAIT'}); unchangedObservations=$observations.Count; terminalRead='DIAGNOSTIC_FALLBACK_ONLY' }
 }
 
-function Invoke-S3($Data) {
+function Invoke-S3Case($Data) {
     $verdict = Text $Data 'reviewVerdict'
     Require ($verdict -in @('REVIEW_PASS','REVIEW_FAIL')) 'Unsupported Review verdict.'
     Require ((Bool $Data 'leadMayOverrideVerdict') -eq $false) 'Lead may not override Reviewer verdict.'
@@ -126,7 +135,30 @@ function Invoke-S3($Data) {
     Require ($reviewedSha -ceq $frozenSha) 'Reviewer SHA does not match frozen implementation SHA.'
     $humanApproval = Bool $Data 'separateHumanApproval'
     $eligible = ($verdict -ceq 'REVIEW_PASS' -and $humanApproval)
-    return [ordered]@{ scenarioId='S3'; ok=$true; reviewVerdict=$verdict; reviewedSha=$reviewedSha; verdictImmutable=$true; g5Eligible=$eligible; nextAction=$(if($eligible){'G5_AUTHORIZED_ACTION'}elseif($verdict -ceq 'REVIEW_FAIL'){'REWORK_OR_STOP'}else{'HUMAN_GATE_REQUIRED'}) }
+    return [ordered]@{ ok=$true; reviewVerdict=$verdict; reviewedSha=$reviewedSha; verdictImmutable=$true; g5Eligible=$eligible; nextAction=$(if($eligible){'G5_AUTHORIZED_ACTION'}elseif($verdict -ceq 'REVIEW_FAIL'){'REWORK_OR_STOP'}else{'HUMAN_GATE_REQUIRED'}) }
+}
+
+function Invoke-S3($Data) {
+    $caseValue = Property $Data 'controlledCases'
+    if ($null -eq $caseValue) {
+        $single = Invoke-S3Case $Data
+        return [ordered]@{ scenarioId='S3'; ok=$single.ok; reviewVerdict=$single.reviewVerdict; reviewedSha=$single.reviewedSha; verdictImmutable=$single.verdictImmutable; g5Eligible=$single.g5Eligible; nextAction=$single.nextAction }
+    }
+    $cases = @($caseValue)
+    Require ($cases.Count -eq 3) 'S3 aggregate requires exactly three controlled cases.'
+    $out = @()
+    foreach ($case in $cases) {
+        $name = Text $case 'caseId'
+        try { $out += [ordered]@{ caseId=$name; accepted=$true; result=(Invoke-S3Case $case) } }
+        catch { $out += [ordered]@{ caseId=$name; accepted=$false; error=$_.Exception.Message } }
+    }
+    $fail = @($out | Where-Object { $_.caseId -ceq 'CONTROLLED_REVIEW_FAIL' })[0]
+    $override = @($out | Where-Object { $_.caseId -ceq 'LEAD_OVERRIDE_REFUSAL' })[0]
+    $pass = @($out | Where-Object { $_.caseId -ceq 'PASS_WITHOUT_HUMAN_APPROVAL' })[0]
+    Require ($fail.accepted -and -not $fail.result.g5Eligible -and $fail.result.nextAction -ceq 'REWORK_OR_STOP') 'Controlled REVIEW_FAIL result missing.'
+    Require (-not $override.accepted -and $override.error -match 'may not override') 'Lead override refusal missing.'
+    Require ($pass.accepted -and -not $pass.result.g5Eligible -and $pass.result.nextAction -ceq 'HUMAN_GATE_REQUIRED') 'PASS without Human approval result missing.'
+    return [ordered]@{ scenarioId='S3'; ok=$true; controlledInputOnly=$true; formalReviewInvoked=$false; cases=$out }
 }
 
 try {
@@ -142,11 +174,14 @@ try {
     $command = "powershell -NoProfile -File gad-lead/tools/gad-lead.ps1 scenario --input $InputPath"
     $bundle = [ordered]@{ scenarioId=$scenarioId; frozenSha=$frozenSha; command=$command; fixtureIdentity=(Text $data 'fixtureIdentity'); result=$result; exitStatus=0; provenance=[ordered]@{ source='gad-lead.ps1 scenario'; inputSha256=(Sha256 ([IO.File]::ReadAllText($inputPath, [Text.Encoding]::UTF8))) } }
     $canonical = CanonicalJson $bundle
+    $canonicalBytes = Assert-JsonRoundTrip $canonical $scenarioId
     $digest = Sha256 $canonical
     $root = Resolve-EvidenceRoot $EvidenceRoot $repo
     [IO.Directory]::CreateDirectory($root) | Out-Null
     $locator = Join-Path $root "$digest.json"
-    [IO.File]::WriteAllText($locator, $canonical, (New-Object Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllBytes($locator, $canonicalBytes)
+    $retained = (New-Object Text.UTF8Encoding($false, $true)).GetString([IO.File]::ReadAllBytes($locator)) | ConvertFrom-Json
+    Require ((Text $retained 'scenarioId') -ceq $scenarioId) 'Retained Evidence is not parseable canonical UTF-8 JSON.'
     [ordered]@{ ok=$true; scenarioId=$scenarioId; result=$result; evidence=[ordered]@{ locator=$locator; sha256=$digest } } | ConvertTo-Json -Depth 32 -Compress
     exit 0
 }
